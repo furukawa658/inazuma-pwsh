@@ -1,0 +1,59 @@
+{
+  "name": "inazuma-pwsh",
+  "displayName": "InazumaPwsh",
+  "description": "Persistent PowerShell sessions and structured .NET and Playwright diagnostics for AI coding in VS Code on Windows x64.",
+  "version": "0.2.0",
+  "publisher": "ShunsukeF",
+  "icon": "media/icon.png",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/furukawa658/inazuma-pwsh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/furukawa658/inazuma-pwsh/issues"
+  },
+  "homepage": "https://github.com/furukawa658/inazuma-pwsh#readme",
+  "engines": { "vscode": "^1.101.0" },
+  "categories": ["Other"],
+  "extensionKind": ["ui"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "configuration": {
+      "title": "InazumaPwsh",
+      "properties": {
+        "inazumaPwsh.pwshPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Absolute path to an installed pwsh.exe. Leave empty to use INAZUMA_PWSH_PATH or search PATH. An invalid explicit path fails without fallback. Restart the MCP server after changing this setting."
+        }
+      }
+    },
+    "mcpServerDefinitionProviders": [
+      { "id": "inazuma-pwsh.server", "label": "InazumaPwsh" }
+    ]
+  },
+  "files": [
+    "extension.js",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.txt",
+    "media/icon.png",
+    "server/**"
+  ],
+  "scripts": {
+    "test": "node test-extension.cjs",
+    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/inazuma-pwsh-0.2.0-win32-x64.vsix"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.101.0",
+    "@vscode/vsce": "3.6.2"
+  }
+}

@@ -1,0 +1,6 @@
+bin/
+obj/
+artifacts/
+node_modules/
+vscode-extension/server/
+*.vsix
