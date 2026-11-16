@@ -1,8 +1,8 @@
 {
   "name": "inazuma-pwsh",
   "displayName": "InazumaPwsh",
-  "description": "Persistent PowerShell sessions and structured .NET and Playwright diagnostics for AI coding in VS Code on Windows x64.",
-  "version": "0.2.0",
+  "description": "Persistent PowerShell sessions and structured .NET, Playwright, bun test, pytest, and Vitest diagnostics for AI coding in VS Code on Windows x64.",
+  "version": "0.3.0",
   "publisher": "ShunsukeF",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -50,7 +50,7 @@
   ],
   "scripts": {
     "test": "node test-extension.cjs",
-    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/inazuma-pwsh-0.2.0-win32-x64.vsix"
+    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/inazuma-pwsh-0.3.0-win32-x64.vsix"
   },
   "devDependencies": {
     "@types/vscode": "1.101.0",
