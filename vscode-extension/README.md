@@ -6,6 +6,16 @@ InazumaPwsh connects your VS Code coding agent to persistent local PowerShell se
 
 It is built for Windows automation, .NET development, and projects that use Playwright, bun test, pytest, or Vitest.
 
+## What's new in 0.3.0
+
+Three test runner tools join `run_dotnet_build` and `run_playwright`. Instead of reading raw terminal output, your agent receives test counts and a list of failures with file, line, and message.
+
+- **`run_bun_test`** runs `bun test` and reads its JUnit XML report, including stack traces.
+- **`run_pytest`** runs pytest and reads its JUnit XML report. It finds the nearest `.venv` automatically, or you can pass `pythonPath`.
+- **`run_vitest`** runs locally installed Vitest once (`vitest run`) and reads its JSON report, including file-level errors such as import failures.
+
+All three return the same status values: `success`, `error` (failed tests or a failed run), `no_tests`, or `report_unavailable`. A run without a usable report is never reported as `success`. Responses are limited to 8,000 characters and list at most 10 failures; the full log is saved for follow-up searches.
+
 ## Why use InazumaPwsh?
 
 - **Set up once, continue working.** Keep a runspace ready for the next command instead of repeating imports and recreating variables on every call.
@@ -23,6 +33,8 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "Run this project's Playwright tests and summarize the failures and available trace paths."
 - "Inspect this Playwright trace for failed actions, HTTP errors, and console errors."
 - "Run the pytest suite with InazumaPwsh and fix the first failure."
+- "Run `bun test` with InazumaPwsh and show me the failing files and lines."
+- "Run Vitest with InazumaPwsh for `src/utils` only and explain why the import failed."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
