@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/release/0.2.0/vscode-extension/media/icon.png" alt="InazumaPwsh icon" width="128"></p>
+
 # InazumaPwsh
 
 **Keep your PowerShell setup between calls. Get the results your coding agent needs.**
