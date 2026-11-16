@@ -54,6 +54,64 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             return await CombineAsync(report, execution);
         }, cancellationToken);
 
+    [McpServerTool(Name = "run_bun_test")]
+    [Description("Run bun test and return failures and counts from its JUnit XML report. The full log is saved to fullLogPath. Dependencies are not installed automatically.")]
+    public Task<string> RunBunTestAsync(string workingDirectory,
+        [Description("Arguments passed to bun test, with each argument as a separate array element.") ] string[]? testArgs = null,
+        int timeoutSeconds = 180, CancellationToken cancellationToken = default) =>
+        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        {
+            RejectManagedArguments(testArgs, "--reporter");
+            var reportPath = Path.Combine(directory, "bun.xml");
+            var arguments = new List<string> { "test" };
+            arguments.AddRange(testArgs ?? []);
+            arguments.AddRange(["--reporter=junit", $"--reporter-outfile={reportPath}"]);
+            var execution = await NativeProcessRunner.RunAsync("bun", arguments, workingDirectory, timeoutSeconds,
+                new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["NO_COLOR"] = "1" }, token);
+            var report = await TestReportParser.ParseJUnitAsync(reportPath, workingDirectory, execution.ExitCode, cancellationToken: token);
+            return await CombineAsync(report, execution);
+        }, cancellationToken);
+
+    [McpServerTool(Name = "run_pytest")]
+    [Description("Run pytest and return failures and counts from its JUnit XML report. The interpreter is pythonPath, otherwise the nearest .venv found from workingDirectory upwards, otherwise python on PATH. Dependencies are not installed automatically.")]
+    public Task<string> RunPytestAsync(string workingDirectory,
+        [Description("Arguments passed to pytest, with each argument as a separate array element.") ] string[]? testArgs = null,
+        [Description("Optional absolute path to the Python executable that has pytest installed.") ] string? pythonPath = null,
+        int timeoutSeconds = 180, CancellationToken cancellationToken = default) =>
+        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        {
+            RejectManagedArguments(testArgs, "--junitxml", "--junit-xml");
+            var python = ResolvePython(workingDirectory, pythonPath);
+            var reportPath = Path.Combine(directory, "pytest.xml");
+            var arguments = new List<string> { "-m", "pytest" };
+            arguments.AddRange(testArgs ?? []);
+            arguments.Add($"--junitxml={reportPath}");
+            var execution = await NativeProcessRunner.RunAsync(python, arguments, workingDirectory, timeoutSeconds,
+                new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONIOENCODING"] = "utf-8", ["NO_COLOR"] = "1" }, token);
+            var report = await TestReportParser.ParseJUnitAsync(reportPath, workingDirectory, execution.ExitCode, noTestsExitCode: 5, cancellationToken: token);
+            return await CombineAsync(report, execution);
+        }, cancellationToken);
+
+    [McpServerTool(Name = "run_vitest")]
+    [Description("Run a locally installed Vitest once and return failures and counts from its JSON report. Dependencies are not installed automatically. Environment variables are set only in the child process.")]
+    public Task<string> RunVitestAsync(string workingDirectory,
+        [Description("Arguments passed to vitest run, with each argument as a separate array element.") ] string[]? testArgs = null,
+        int timeoutSeconds = 180, CancellationToken cancellationToken = default) =>
+        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        {
+            RejectManagedArguments(testArgs, "--reporter", "--outputFile", "--output-file");
+            var cli = FindPackageFile(workingDirectory, ["vitest"], "vitest.mjs");
+            if (cli == null) throw new FileNotFoundException("Local Vitest CLI was not found. Install project dependencies first.");
+            var reportPath = Path.Combine(directory, "vitest.json");
+            var arguments = new List<string> { cli, "run" };
+            arguments.AddRange(testArgs ?? []);
+            arguments.AddRange(["--reporter=json", $"--outputFile={reportPath}"]);
+            var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
+                new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["CI"] = "1" }, token);
+            var report = await TestReportParser.ParseVitestAsync(reportPath, workingDirectory, execution.ExitCode, token);
+            return await CombineAsync(report, execution);
+        }, cancellationToken);
+
     [McpServerTool(Name = "inspect_playwright_trace")]
     [Description("Inspect a trace ZIP without extracting it and return failed actions, HTTP and JavaScript errors, and a DOM excerpt before the failure. This does not replace visual verification of rendering or CSS.")]
     public Task<string> InspectPlaywrightTraceAsync(string tracePath, int maxOutputChars = 6000,
@@ -77,15 +135,40 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    private static string? FindPlaywrightCli(string workingDirectory)
+    private static string? FindPlaywrightCli(string workingDirectory) =>
+        FindPackageFile(workingDirectory, ["@playwright/test", "playwright"], "cli.js");
+
+    private static string? FindPackageFile(string workingDirectory, string[] packages, string fileName)
     {
         for (var directory = new DirectoryInfo(workingDirectory); directory != null; directory = directory.Parent)
-            foreach (var package in new[] { "@playwright/test", "playwright" })
+            foreach (var package in packages)
             {
-                var cli = Path.Combine(directory.FullName, "node_modules", package, "cli.js");
-                if (File.Exists(cli)) return cli;
+                var file = Path.Combine(directory.FullName, "node_modules", package, fileName);
+                if (File.Exists(file)) return file;
             }
         return null;
+    }
+
+    private static void RejectManagedArguments(string[]? testArgs, params string[] prefixes)
+    {
+        if (testArgs?.Any(argument => prefixes.Any(prefix => argument.StartsWith(prefix, StringComparison.Ordinal))) == true)
+            throw new ArgumentException($"{string.Join(", ", prefixes)} is managed by this tool.");
+    }
+
+    private static string ResolvePython(string workingDirectory, string? pythonPath)
+    {
+        if (!string.IsNullOrEmpty(pythonPath))
+        {
+            if (!Path.IsPathFullyQualified(pythonPath) || !File.Exists(pythonPath))
+                throw new ArgumentException("pythonPath must be an existing absolute file path.");
+            return pythonPath;
+        }
+        for (var directory = new DirectoryInfo(workingDirectory); directory != null; directory = directory.Parent)
+        {
+            var venvPython = Path.Combine(directory.FullName, ".venv", "Scripts", "python.exe");
+            if (File.Exists(venvPython)) return venvPython;
+        }
+        return "python";
     }
 
     private static async Task<string> CombineAsync(string report, NativeProcessRunner.Result execution)

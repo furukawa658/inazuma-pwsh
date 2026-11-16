@@ -2,9 +2,9 @@
 
 **Keep your PowerShell setup between calls. Get the results your coding agent needs.**
 
-InazumaPwsh connects your VS Code coding agent to persistent local PowerShell sessions on Windows x64. Reuse variables, loaded modules, and your working location across tool calls. Investigate .NET build errors and Playwright failures through structured diagnostics, with full logs available when you need the details.
+InazumaPwsh connects your VS Code coding agent to persistent local PowerShell sessions on Windows x64. Reuse variables, loaded modules, and your working location across tool calls. Investigate .NET build errors and Playwright, bun test, pytest, and Vitest failures through structured diagnostics, with full logs available when you need the details.
 
-It is built for Windows automation, .NET development, and projects that use Playwright tests.
+It is built for Windows automation, .NET development, and projects that use Playwright, bun test, pytest, or Vitest.
 
 ## Why use InazumaPwsh?
 
@@ -22,6 +22,7 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "Build this .NET project with InazumaPwsh. Show the compiler errors first and consult the full log if the build fails outside compilation."
 - "Run this project's Playwright tests and summarize the failures and available trace paths."
 - "Inspect this Playwright trace for failed actions, HTTP errors, and console errors."
+- "Run the pytest suite with InazumaPwsh and fix the first failure."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
@@ -32,7 +33,7 @@ The agent must choose and reuse a unique `sessionId` to keep chat state separate
 - The extension bundles the server binary and the worker script (`powershell-worker.ps1`). The worker script runs under the external PowerShell 7 process to manage session runspaces.
 - A trusted workspace. The extension runs in the local extension host, including when a remote workspace is open; it does not switch to the remote shell or filesystem.
 - Install the supplied Windows x64 VSIX using **Extensions: Install from VSIX** or from the Visual Studio Code Marketplace. The extension registers its MCP server automatically; no `mcp.json` entry is required. Follow VS Code's prompts to trust the workspace, start the server, and approve tool calls.
-- Build diagnostics require the .NET SDK; Playwright diagnostics require Node.js and a locally installed Playwright package.
+- Build diagnostics require the .NET SDK; Playwright diagnostics require Node.js and a locally installed Playwright package. `run_bun_test` requires Bun on `PATH`, `run_pytest` requires a Python interpreter with pytest installed, and `run_vitest` requires Node.js and a locally installed Vitest package.
 
 The InazumaPwsh project code is licensed under the MIT License, copyright 2026 Shunsuke F. Bundled third-party components retain their own licenses; see `LICENSE` and `THIRD-PARTY-NOTICES.txt` for details. Repository: https://github.com/furukawa658/inazuma-pwsh
 
@@ -45,6 +46,9 @@ The InazumaPwsh project code is licensed under the MIT License, copyright 2026 S
 | `run_dotnet_build` | Run a build and return the exit code and SARIF compiler diagnostics. Warnings are omitted by default. |
 | `run_playwright` | Run locally installed Playwright and return test counts, failures, and attachment paths from its JSON report. |
 | `inspect_playwright_trace` | Inspect a trace ZIP for failed actions, HTTP and console errors, and a DOM excerpt. |
+| `run_bun_test` | Run `bun test` and return test counts and failures with file, line, message, and stack from its JUnit XML report. |
+| `run_pytest` | Run pytest and return test counts and failures with file, line, and message from its JUnit XML report. |
+| `run_vitest` | Run locally installed Vitest once (`vitest run`) and return test counts, failures, and file-level errors from its JSON report. |
 
 ## Sessions and output
 
@@ -56,7 +60,7 @@ Each session has a separate PowerShell worker process. Changes to process enviro
 
 There are at most six sessions, including `default`. Idle non-default sessions expire after 30 minutes and are cleaned up approximately once a minute. Running or waiting sessions are not removed.
 
-`execute_powershell` accepts an existing absolute `workingDirectory` for one call. Its default timeout is 60 seconds; build and Playwright defaults are 120 and 180 seconds. Execution timeouts are clamped to 1 through 300 seconds.
+`execute_powershell` accepts an existing absolute `workingDirectory` for one call. Its default timeout is 60 seconds; the build default is 120 seconds and test runner defaults are 180 seconds. Execution timeouts are clamped to 1 through 300 seconds.
 
 `maxOutputChars` limits `output` to 1,000 through 50,000 characters, with a default of 6,000. When output is truncated, `data` is null and the full log is saved locally. This limit does not bound the full JSON response or memory used by a script. Return only the data you need.
 
@@ -64,9 +68,11 @@ Set `compactResponse` to `true` to omit `output` when it exactly duplicates `dat
 
 Python executables invoked without pipeline input receive closed standard input. Existing pipelines are preserved. Detection applies to command names that resolve to executables before execution, such as `python`, `python3`, and `py`; dynamic names and aliases changed during execution are not guaranteed. Interactive Python input is not supported.
 
-Build and Playwright diagnostic responses are bounded to 8,000 characters. Nonzero exit codes do not indicate success. Missing or invalid reports return `report_unavailable` or `error`. Inspect the full log for MSBuild failures outside compiler diagnostics. The MCP SDK may report argument type errors as tool errors rather than JSON-RPC `InvalidParams`.
+Build and test runner diagnostic responses are bounded to 8,000 characters. Nonzero exit codes do not indicate success. Missing or invalid reports return `report_unavailable` or `error`. Inspect the full log for MSBuild failures outside compiler diagnostics. The MCP SDK may report argument type errors as tool errors rather than JSON-RPC `InvalidParams`.
 
 Playwright is resolved from the target directory or its parents; dependencies are not installed with `npx`. The JSON reporter is managed by the tool. Trace inspection has limits on input, event count, DOM depth, and output. It does not replace visual testing of canvas, video, rendering, or CSS. Sensitive URL parameters are masked, but other secrets may remain.
+
+The test runner tools manage their report options: `run_bun_test` rejects `--reporter*`, `run_pytest` rejects `--junitxml` and `--junit-xml`, and `run_vitest` rejects `--reporter` and `--outputFile`. Pass other arguments, such as test paths or filters, through `testArgs`. `run_pytest` uses `pythonPath` when given (an existing absolute path), otherwise the nearest `.venv\Scripts\python.exe` in the working directory or its parents, otherwise `python` on `PATH`; pytest exit code 5 is reported as `no_tests`. Vitest is resolved from the target directory or its parents and always runs once, not in watch mode. JUnit XML is read with DTD processing disabled. Reports larger than 50 MB return `report_unavailable`, and at most 10 failures are listed.
 
 ## Safety and logs
 
@@ -86,12 +92,12 @@ From the project directory:
 dotnet build InazumaPwsh.csproj --nologo -v:q
 node test-mcp.mjs
 $sourceRoot = (Get-Location).Path
-dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.2.0 --nologo -v:q
-node test-mcp.mjs artifacts/win-x64-0.2.0/InazumaPwsh.exe
+dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.3.0 --nologo -v:q
+node test-mcp.mjs artifacts/win-x64-0.3.0/InazumaPwsh.exe
 ```
 
 Reproducibility requires the same source, SDK, runtime, dependencies, and build settings. Path mapping alone is not a guarantee across builds.
 
 Prefer the default extraction cache. If you set `DOTNET_BUNDLE_EXTRACT_BASE_DIR`, use a short absolute Windows path with backslashes. In candidate tests, forward-slash values failed to start CoreCLR with `0x80070057`, and long extraction paths failed while writing bundled module files. The chosen cache must also be writable by the current user.
 
-The tests use temporary projects and include a mock Playwright CLI. A mock test does not establish that a real browser workflow passed. Python tests are skipped when Python is unavailable.
+The tests use temporary projects and include mock Playwright and Vitest CLIs and a fake pytest interpreter. A mock test does not establish that a real browser workflow passed. The real `bun test` check is skipped when Bun is unavailable, and the real pytest check runs only when `INAZUMA_TEST_PYTHON` points to a Python executable with pytest installed. Python tests are skipped when Python is unavailable.

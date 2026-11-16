@@ -174,7 +174,7 @@ public static class PlaywrightResultParser
 
     private static string ExtractMessage(JsonElement el) => el.ValueKind == JsonValueKind.String ? el.GetString() ?? "" : (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("message", out var m) ? m.GetString() ?? "" : "");
 
-    private static string FilterStack(string? stack)
+    internal static string FilterStack(string? stack)
     {
         if (string.IsNullOrWhiteSpace(stack)) return "";
         var lines = stack.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => Truncate(l.Trim(), 300)).Where(l => l.Length > 0);
@@ -182,9 +182,9 @@ public static class PlaywrightResultParser
         return string.Join("\n", user.Count > 0 ? user : lines.Take(4));
     }
 
-    private static string StripAnsi(string? text) => string.IsNullOrEmpty(text) ? "" : AnsiRegex.Replace(text, "");
+    internal static string StripAnsi(string? text) => string.IsNullOrEmpty(text) ? "" : AnsiRegex.Replace(text, "");
 
-    private static string ToRelativePath(string path, string workingDir)
+    internal static string ToRelativePath(string path, string workingDir)
     {
         if (string.IsNullOrWhiteSpace(path)) return "";
         try { return Path.IsPathRooted(path) && !string.IsNullOrWhiteSpace(workingDir) ? Path.GetRelativePath(workingDir, path).Replace('\\', '/') : path.Replace('\\', '/'); }
@@ -243,7 +243,7 @@ public static class PlaywrightResultParser
         return JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, curG, curF), JsonOptions);
     }
 
-    private static string ClipLines(string? str, int maxLines) => string.IsNullOrEmpty(str) ? "" : string.Join("\n", str.Split('\n').Take(maxLines));
+    internal static string ClipLines(string? str, int maxLines) => string.IsNullOrEmpty(str) ? "" : string.Join("\n", str.Split('\n').Take(maxLines));
 
-    private static string Truncate(string str, int maxLen) => str.Length <= maxLen ? str : string.Concat(str.AsSpan(0, maxLen), "...");
+    internal static string Truncate(string str, int maxLen) => str.Length <= maxLen ? str : string.Concat(str.AsSpan(0, maxLen), "...");
 }
