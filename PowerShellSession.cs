@@ -32,6 +32,12 @@ public sealed class PowerShellSession : IDisposable
         }
     }
 
+    public static void ValidateEnvironment()
+    {
+        ResolvePwshPath();
+        ResolveWorkerPath();
+    }
+
     private static string ResolvePwshPath()
     {
         var overridePath = Environment.GetEnvironmentVariable("INAZUMA_PWSH_PATH");
@@ -457,21 +463,25 @@ public sealed class PowerShellSession : IDisposable
 
             var compressed = await OutputCompressor.CompressAsync(text, maxOutputChars);
 
-            return JsonDefaults.Serialize(new
+            var output = compactResponse && !compressed.IsTruncated && dataObject != null &&
+                compressed.Content == (dataObject is string dataText ? dataText : JsonDefaults.Serialize(dataObject))
+                ? null : compressed.Content;
+
+            // \u7a7a\u30fb\u65e2\u5b9a\u5024\u306e\u30d5\u30a3\u30fc\u30eb\u30c9\u306f\u7701\u7565\u3057\u3066\u5fdc\u7b54\u3092\u77ed\u304f\u3059\u308b
+            var response = new Dictionary<string, object?> { ["status"] = status };
+            if (!compressed.IsTruncated && dataObject != null) response["data"] = dataObject;
+            if (errors.Count > 0) response["errors"] = errors.ToArray();
+            if (warnings.Length > 0) response["warnings"] = warnings;
+            response["durationMs"] = sw.ElapsedMilliseconds;
+            if (exitCode != 0) response["exitCode"] = exitCode;
+            if (compressed.IsTruncated)
             {
-                status,
-                data = compressed.IsTruncated ? null : dataObject,
-                errors = errors.ToArray(),
-                warnings,
-                durationMs = sw.ElapsedMilliseconds,
-                exitCode,
-                isTruncated = compressed.IsTruncated,
-                fullLogPath = compressed.FullLogPath,
-                output = compactResponse && !compressed.IsTruncated && dataObject != null &&
-                    compressed.Content == (dataObject is string dataText ? dataText : JsonDefaults.Serialize(dataObject))
-                    ? null : compressed.Content,
-                stats = new { compressed.OriginalChars, compressed.OriginalLines }
-            });
+                response["isTruncated"] = true;
+                response["fullLogPath"] = compressed.FullLogPath;
+                response["stats"] = new { compressed.OriginalChars, compressed.OriginalLines };
+            }
+            if (output != null) response["output"] = output;
+            return JsonDefaults.Serialize(response);
         }
         finally
         {

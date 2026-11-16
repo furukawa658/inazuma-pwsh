@@ -315,10 +315,37 @@ try {
                 $dataIsString = $true
                 $dataString = [string]$outputCollection[0].BaseObject
             } else {
+                # \u8907\u96d1\u306a.NET\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u6df1\u3044JSON\u306b\u3059\u308b\u3068\u6570MB\u3092\u8d85\u3048\u308b\u305f\u3081\u3001\u8868\u793a\u30c6\u30ad\u30b9\u30c8\u3078\u5909\u63db\u3059\u308b
+                $plainData = $true
+                foreach ($item in $outputCollection) {
+                    $base = if ($null -ne $item) { $item.PSObject.BaseObject } else { $null }
+                    if ($null -eq $base) { continue }
+                    $t = $base.GetType()
+                    if ($t.IsPrimitive -or $t.IsEnum -or $base -is [string] -or $base -is [decimal] -or $base -is [datetime] -or
+                        $base -is [datetimeoffset] -or $base -is [timespan] -or $base -is [guid] -or $base -is [System.Management.Automation.PSCustomObject] -or
+                        $base -is [System.Collections.IDictionary] -or $base -is [object[]]) { continue }
+                    $plainData = $false
+                    break
+                }
+
+                if (-not $plainData) {
+                    try {
+                        $textPs = [System.Management.Automation.PowerShell]::Create()
+                        $textPs.Runspace = $runspace
+                        $null = $textPs.AddCommand("Out-String").AddParameter("Width", 200)
+                        $textRes = $textPs.Invoke($outputCollection)
+                        $dataIsString = $true
+                        $dataString = (($textRes | ForEach-Object { $_.ToString() }) -join "").TrimEnd()
+                        $textPs.Dispose()
+                    } catch {
+                        $dataIsString = $true
+                        $dataString = (($outputStrings) -join "`n")
+                    }
+                } else {
                 try {
                     $jsonPs = [System.Management.Automation.PowerShell]::Create()
                     $jsonPs.Runspace = $runspace
-                    $null = $jsonPs.AddCommand("ConvertTo-Json").AddParameter("Depth", 5).AddParameter("Compress", $true)
+                    $null = $jsonPs.AddCommand("ConvertTo-Json").AddParameter("Depth", 3).AddParameter("Compress", $true)
                     if ($outputCollection.Count -eq 1) {
                         $null = $jsonPs.AddParameter("InputObject", $outputCollection[0])
                     } else {
@@ -340,6 +367,7 @@ try {
                     } else {
                         $dataJson = ConvertTo-Json @($outputCollection | ForEach-Object { $_.ToString() }) -Compress
                     }
+                }
                 }
             }
 
@@ -368,3 +396,6 @@ try {
     try { $runspace.Close(); $runspace.Dispose() } catch {}
     try { $reader.Dispose(); $writer.Dispose(); $pipe.Dispose() } catch {}
 }
+
+
+

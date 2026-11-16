@@ -18,17 +18,12 @@ public sealed class ConcurrentPowerShellManager : IDisposable
     private readonly Timer _timer;
     private bool _disposed;
 
+    // lock内でDisposeするため、Session.Dispose()がセマフォ待ちで長く止まらないことが前提
     public ConcurrentPowerShellManager(IHostApplicationLifetime lifetime)
     {
         _stopping = lifetime.ApplicationStopping;
         _timer = new Timer(_ => ReapIdleSessions(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
-
-    public void Initialize() => UseAsync(null, session =>
-    {
-        session.Initialize();
-        return Task.FromResult("");
-    }).GetAwaiter().GetResult();
 
     public Task<string> ExecuteAsync(string script, string? workingDirectory, int timeoutSeconds, int maxOutputChars,
         string? sessionId, bool compactResponse = true, CancellationToken cancellationToken = default) => UseAsync(sessionId, async session =>
@@ -55,7 +50,14 @@ public sealed class ConcurrentPowerShellManager : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_sessions.TryGetValue(key, out entry!))
             {
-                if (_sessions.Count >= 6) return Error("Session limit reached (6 including default). Reuse an existing sessionId.");
+                if (_sessions.Count >= 6)
+                {
+                    var victim = _sessions.Where(pair => pair.Value.Users == 0 && !pair.Value.Session.IsStopping)
+                        .OrderBy(pair => pair.Value.LastUsed).Select(pair => (KeyValuePair<string, Entry>?)pair).FirstOrDefault();
+                    if (victim == null) return Error("Session limit reached (6 including default) and all sessions are busy. Reuse an existing sessionId.");
+                    _sessions.Remove(victim.Value.Key);
+                    victim.Value.Value.Session.Dispose();
+                }
                 entry = new Entry();
                 _sessions.Add(key, entry);
             }
@@ -80,8 +82,8 @@ public sealed class ConcurrentPowerShellManager : IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            foreach (var pair in _sessions.Where(pair => pair.Key != "default" && pair.Value.Users == 0 && !pair.Value.Session.IsStopping
-                && DateTime.UtcNow - pair.Value.LastUsed > TimeSpan.FromMinutes(30)).ToArray())
+            foreach (var pair in _sessions.Where(pair => pair.Value.Users == 0 && !pair.Value.Session.IsStopping
+                && DateTime.UtcNow - pair.Value.LastUsed > TimeSpan.FromMinutes(10)).ToArray())
             {
                 _sessions.Remove(pair.Key);
                 pair.Value.Session.Dispose();

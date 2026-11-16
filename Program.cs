@@ -44,9 +44,9 @@ using var host = builder.Build();
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 var parentWatcher = parent == null ? Task.CompletedTask : WatchParentAsync(parent, lifetime);
 
-// サーバー起動時にRunspaceを明示的に初期化して常駐
-var session = host.Services.GetRequiredService<ConcurrentPowerShellManager>();
-session.Initialize();
+// pwsh/ワーカーの解決だけを起動時に検証し、ワーカーは最初の呼出しで起動する
+PowerShellSession.ValidateEnvironment();
+LogCleaner.StartBackgroundCleanup();
 
 try { await host.RunAsync(); }
 catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested) { }

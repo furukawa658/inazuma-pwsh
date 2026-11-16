@@ -8,6 +8,15 @@ InazumaPwsh connects your VS Code coding agent to persistent local PowerShell se
 
 It is built for Windows automation, .NET development, and projects that use Playwright, bun test, pytest, or Vitest.
 
+## What's new in 0.4.1
+
+0.4.1 shortens responses and reduces idle resource use.
+
+- **Complex objects return text.** Output such as `Get-ChildItem` or `Get-Item` (FileInfo, Process and other .NET objects) is returned as formatted text instead of a depth-5 JSON tree that could reach tens of megabytes. Strings, numbers, hashtables, `[pscustomobject]` and arrays of them still return structured `data`; JSON depth is now 3. Use `ConvertTo-Json` in the script when you need full structure.
+- **Shorter responses.** Empty `errors`/`warnings`, `isTruncated: false`, `exitCode: 0`, null `data`/`output`/`fullLogPath` and `stats` are omitted. `stats`, `isTruncated` and `fullLogPath` appear only when output is truncated. This is a behavior change for clients that read these fields unconditionally.
+- **Lazy default session.** The server no longer starts a `default` PowerShell worker at launch; it starts on first use. The pwsh path and worker script are still validated at startup.
+- **Session reclaim.** Idle sessions (including `default`) expire after 10 minutes. At the six-session limit, the least recently used idle session is evicted instead of failing.
+- **Log cleanup.** At startup, files in `%TEMP%/inazuma-pwsh-logs/` older than 3 days are deleted, and the oldest are deleted while the total exceeds 200 MB.
 ## What's new in 0.4.0
 
 0.4.0 helps your agent read less to find what it needs, and removes wasted characters from every response.
@@ -97,7 +106,7 @@ Variables, modules, and the current location are retained per runspace within th
 
 Each session has a separate PowerShell worker process. Changes to process environment variables (`$env:`) remain in that worker and its children; they do not update another session or the MCP server. Files, user/machine environment settings, and other operating system resources remain shared. This separation is not a security boundary.
 
-There are at most six sessions, including `default`. Idle non-default sessions expire after 30 minutes and are cleaned up approximately once a minute. Running or waiting sessions are not removed.
+There are at most six sessions, including `default`. Idle sessions expire after 10 minutes (the least recently used idle session is evicted at the limit) and are cleaned up approximately once a minute. Running or waiting sessions are not removed.
 
 `execute_powershell` accepts an existing absolute `workingDirectory` for one call. Its default timeout is 60 seconds; the build default is 120 seconds and test runner defaults are 180 seconds. Execution timeouts are clamped to 1 through 300 seconds.
 
@@ -119,7 +128,7 @@ Scripts run with the current user's permissions. InazumaPwsh is not a security s
 
 Cancellation and timeouts request PowerShell to stop. An uninterruptible .NET call can continue after the response; its session remains unavailable while stopping. After a 10-second stop grace period, the server terminates the worker and its Windows Job Object process tree; session state is lost. Diagnostic tools also use a Windows Job Object on cancellation or timeout. The extension requests shutdown when its parent extension host exits.
 
-Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` identifies an execution log; `fullReportPath`, when present, identifies detailed structured diagnostics. Logs are not deleted automatically and may contain sensitive output. Review and remove them when no longer needed.
+Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` identifies an execution log; `fullReportPath`, when present, identifies detailed structured diagnostics. Logs older than 3 days, or beyond 200 MB in total, are deleted at server startup, and they may contain sensitive output. Review and remove them when no longer needed.
 
 ## Build and verification
 
@@ -131,8 +140,8 @@ From the project directory:
 dotnet build InazumaPwsh.csproj --nologo -v:q
 node test-mcp.mjs
 $sourceRoot = (Get-Location).Path
-dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.4.0 --nologo -v:q
-node test-mcp.mjs artifacts/win-x64-0.4.0/InazumaPwsh.exe
+dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.4.1 --nologo -v:q
+node test-mcp.mjs artifacts/win-x64-0.4.1/InazumaPwsh.exe
 ```
 
 Reproducibility requires the same source, SDK, runtime, dependencies, and build settings. Path mapping alone is not a guarantee across builds.

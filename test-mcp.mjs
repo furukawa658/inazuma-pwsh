@@ -108,7 +108,7 @@ try {
     await check('compactResponse defaults to true', async () => {
         const response = await call('42');
         assert.equal(response.data, 42);
-        assert.equal(response.output, null);
+        assert.equal(response.output, undefined);
     });
     await check('native UTF-8 output is decoded', async () => {
         const response = await call(`& ${literal(process.execPath)} -e "process.stdout.write(Buffer.from('e697a5e69cace8aa9e','hex'))"`);
@@ -312,6 +312,18 @@ try {
         } while (true);
         assert.equal(resumed.data, 42);
     });
+    await check('complex objects return text and success omits empty fields', async () => {
+        const started = performance.now();
+        const files = await call('Get-Item .', { workingDirectory: fixture });
+        assert.equal(typeof files.data, 'string', JSON.stringify(files).slice(0, 300));
+        assert.ok(files.data.length < 3000, `data too large: ${files.data.length}`);
+        assert.ok(performance.now() - started < 5000);
+        const ok = await call('42');
+        assert.deepEqual(Object.keys(ok).sort(), ['data', 'durationMs', 'status']);
+    });
+    await check('session limit evicts the least recently used idle session', async () => {
+        for (let i = 0; i < 8; i++) assert.equal((await call('42', { sessionId: `lru-${i}` })).data, 42);
+    });
     await check('persistent state and structured output', async () => {
         assert.equal((await call('$global:inazumaValue = 42; $inazumaValue')).data, 42);
         assert.equal((await call('$inazumaValue')).data, 42);
@@ -323,14 +335,14 @@ try {
         const regular = await call(script, { compactResponse: false });
         const compact = await call(script, { compactResponse: true });
         assert.equal(compact.data, regular.data);
-        assert.equal(compact.output, null);
+        assert.equal(compact.output, undefined);
         assert.ok(JSON.stringify(compact).length < JSON.stringify(regular).length * 0.6);
         const structured = await call('[pscustomobject]@{ answer = 42 }', { compactResponse: true });
         assert.deepEqual(structured.data, { answer: 42 });
-        assert.equal(structured.output, null);
+        assert.equal(structured.output, undefined);
         const truncated = await call("'x' * 3000", { compactResponse: true, maxOutputChars: 1000 });
         assert.equal(truncated.isTruncated, true);
-        assert.equal(truncated.data, null);
+        assert.equal(truncated.data, undefined);
         assert.ok(truncated.output.length > 0);
         assert.ok(truncated.fullLogPath);
     });
