@@ -31,7 +31,7 @@ public sealed class ConcurrentPowerShellManager : IDisposable
     }).GetAwaiter().GetResult();
 
     public Task<string> ExecuteAsync(string script, string? workingDirectory, int timeoutSeconds, int maxOutputChars,
-        string? sessionId, bool compactResponse, CancellationToken cancellationToken) => UseAsync(sessionId, async session =>
+        string? sessionId, bool compactResponse = true, CancellationToken cancellationToken = default) => UseAsync(sessionId, async session =>
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopping);
         return await session.ExecuteScriptAsync(script, timeoutSeconds, linked.Token, workingDirectory, maxOutputChars, compactResponse);
@@ -89,7 +89,7 @@ public sealed class ConcurrentPowerShellManager : IDisposable
         }
     }
 
-    private static string Error(string message) => JsonSerializer.Serialize(new
+    private static string Error(string message) => JsonDefaults.Serialize(new
     {
         status = "error", data = (object?)null, errors = new[] { message }, warnings = Array.Empty<string>(), durationMs = 0
     });

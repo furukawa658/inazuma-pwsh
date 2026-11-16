@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -34,7 +35,12 @@ public static class TestReportParser
         public List<Failure> Failures { get; } = [];
     }
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, WriteIndented = false };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     /// <summary>Parses a JUnit XML report such as those written by bun test and pytest.</summary>
     public static Task<string> ParseJUnitAsync(string reportPath, string workingDirectory, int exitCode, int? noTestsExitCode = null, CancellationToken cancellationToken = default) =>

@@ -255,7 +255,7 @@ public sealed class PowerShellSession : IDisposable
             await EnsureWorkerRunningUnderLock();
 
             var reqId = Interlocked.Increment(ref _nextRequestId);
-            var reqJson = JsonSerializer.Serialize(new { action = "reset", id = reqId });
+            var reqJson = JsonDefaults.Serialize(new { action = "reset", id = reqId });
             await _writer!.WriteLineAsync(reqJson);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -268,7 +268,7 @@ public sealed class PowerShellSession : IDisposable
                 await EnsureWorkerRunningUnderLock();
             }
 
-            return JsonSerializer.Serialize(new
+            return JsonDefaults.Serialize(new
             {
                 status = "success",
                 data = "PowerShell session has been reset successfully.",
@@ -284,11 +284,11 @@ public sealed class PowerShellSession : IDisposable
     }
 
     public async Task<string> ExecuteScriptAsync(string script, int timeoutSeconds = 60, CancellationToken cancellationToken = default,
-        string? workingDirectory = null, int maxOutputChars = 6000, bool compactResponse = false)
+        string? workingDirectory = null, int maxOutputChars = 6000, bool compactResponse = true)
     {
         if (workingDirectory != null && (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory)))
         {
-            return JsonSerializer.Serialize(new { status = "error", data = (object?)null,
+            return JsonDefaults.Serialize(new { status = "error", data = (object?)null,
                 errors = new[] { "workingDirectory must be an existing absolute directory." },
                 warnings = Array.Empty<string>(), durationMs = 0L });
         }
@@ -309,7 +309,7 @@ public sealed class PowerShellSession : IDisposable
                 script,
                 workingDirectory
             };
-            var reqJson = JsonSerializer.Serialize(reqObj);
+            var reqJson = JsonDefaults.Serialize(reqObj);
             await _writer!.WriteLineAsync(reqJson);
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)));
@@ -331,7 +331,7 @@ public sealed class PowerShellSession : IDisposable
                 _stopping = true;
                 deferredCleanup = true;
 
-                var stopJson = JsonSerializer.Serialize(new { action = "stop", id = reqId });
+                var stopJson = JsonDefaults.Serialize(new { action = "stop", id = reqId });
                 try { await _writer.WriteLineAsync(stopJson); } catch { }
 
                 var cleanup = Task.Run(async () =>
@@ -354,7 +354,7 @@ public sealed class PowerShellSession : IDisposable
 
                 await Task.WhenAny(cleanup, Task.Delay(150));
                 sw.Stop();
-                return JsonSerializer.Serialize(new
+                return JsonDefaults.Serialize(new
                 {
                     status = isTimeout ? "timeout" : "cancelled",
                     data = (object?)null,
@@ -370,7 +370,7 @@ public sealed class PowerShellSession : IDisposable
             {
                 sw.Stop();
                 KillWorkerUnderLock();
-                return JsonSerializer.Serialize(new
+                return JsonDefaults.Serialize(new
                 {
                     status = "error",
                     data = (object?)null,
@@ -385,7 +385,7 @@ public sealed class PowerShellSession : IDisposable
             if (responseLine == null)
             {
                 KillWorkerUnderLock();
-                return JsonSerializer.Serialize(new
+                return JsonDefaults.Serialize(new
                 {
                     status = "error",
                     data = (object?)null,
@@ -401,7 +401,7 @@ public sealed class PowerShellSession : IDisposable
             var stopped = root.TryGetProperty("stopped", out var stopProp) && stopProp.GetBoolean();
             if (stopped)
             {
-                return JsonSerializer.Serialize(new
+                return JsonDefaults.Serialize(new
                 {
                     status = "cancelled",
                     data = (object?)null,
@@ -452,12 +452,12 @@ public sealed class PowerShellSession : IDisposable
             }
             else
             {
-                text = JsonSerializer.Serialize(dataObject);
+                text = JsonDefaults.Serialize(dataObject);
             }
 
             var compressed = await OutputCompressor.CompressAsync(text, maxOutputChars);
 
-            return JsonSerializer.Serialize(new
+            return JsonDefaults.Serialize(new
             {
                 status,
                 data = compressed.IsTruncated ? null : dataObject,
@@ -468,7 +468,7 @@ public sealed class PowerShellSession : IDisposable
                 isTruncated = compressed.IsTruncated,
                 fullLogPath = compressed.FullLogPath,
                 output = compactResponse && !compressed.IsTruncated && dataObject != null &&
-                    compressed.Content == (dataObject is string dataText ? dataText : JsonSerializer.Serialize(dataObject))
+                    compressed.Content == (dataObject is string dataText ? dataText : JsonDefaults.Serialize(dataObject))
                     ? null : compressed.Content,
                 stats = new { compressed.OriginalChars, compressed.OriginalLines }
             });
@@ -482,7 +482,7 @@ public sealed class PowerShellSession : IDisposable
         }
     }
 
-    private static string StoppingResponse() => JsonSerializer.Serialize(new
+    private static string StoppingResponse() => JsonDefaults.Serialize(new
     {
         status = "error",
         data = (object?)null,

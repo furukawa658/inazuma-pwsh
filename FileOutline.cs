@@ -1,0 +1,377 @@
+using System.Text;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
+
+namespace InazumaPwsh;
+
+public sealed class OutlineEntry
+{
+    [JsonPropertyName("start")]
+    public int Start { get; set; }
+
+    [JsonPropertyName("end")]
+    public int End { get; set; }
+
+    [JsonPropertyName("level")]
+    public int Level { get; set; }
+
+    [JsonPropertyName("title")]
+    public string Title { get; set; } = string.Empty;
+
+    public OutlineEntry(int start, int end, int level, string title)
+    {
+        Start = start;
+        End = end;
+        Level = level;
+        Title = title;
+    }
+}
+
+internal static partial class FileOutline
+{
+    private static bool _providerRegistered;
+
+    [GeneratedRegex(@"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))")]
+    private static partial Regex AnsiRegex();
+
+    private static readonly Regex MarkdownHeadingRegex = new(@"^(#{1,6})\s+(.+?)\s*#*\s*$", RegexOptions.Compiled);
+
+    private static readonly Regex ControlKeywordsRegex = new(@"^(if|for|while|switch|catch|return|new|else)\b", RegexOptions.Compiled);
+
+    private static readonly Regex CodeTypeRegex = new(
+        @"^(public|private|protected|internal|export|abstract|sealed|static|partial|default|async|\s)*\s*(class|interface|struct|record|enum|namespace|module|type)\s+\w+", RegexOptions.Compiled);
+
+    private static readonly Regex CodeFunctionRegex = new(
+        @"^(export\s+)?(async\s+)?function\s*\*?\s*\w+", RegexOptions.Compiled);
+
+    private static readonly Regex CodeMethodRegex = new(
+        @"^(public|private|protected|internal|static|async|override|virtual|sealed|abstract|\s)+[\w<>\[\],\s?]+\s+\w+\s*\(", RegexOptions.Compiled);
+
+    private static readonly Regex CodePythonDefRegex = new(@"^def\s+\w+", RegexOptions.Compiled);
+
+    private static readonly Regex CodeClassRegex = new(@"^class\s+\w+", RegexOptions.Compiled);
+
+    private static readonly Regex CodeGoFuncRegex = new(@"^func\s+", RegexOptions.Compiled);
+
+    private static readonly Regex CodeRustFnRegex = new(@"^(pub\s+)?fn\s+\w+", RegexOptions.Compiled);
+
+    private static readonly Regex CodePwshFunctionRegex = new(@"^function\s+[\w-]+", RegexOptions.Compiled);
+
+    private static readonly Regex CodeVbRegex = new(
+        @"^(Public|Private|Protected|Friend|Shared|\s)*\s*(Sub|Function|Class|Module|Property)\s+\w+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex JsonKeyRegex = new(@"^\s{0,4}""([^""]+)""\s*:", RegexOptions.Compiled);
+
+    private static readonly Regex YamlKeyRegex = new(@"^([A-Za-z0-9_""'.-][^:#]*):", RegexOptions.Compiled);
+
+    public static string StripAnsi(string? text) =>
+        string.IsNullOrEmpty(text) ? string.Empty : AnsiRegex().Replace(text, string.Empty);
+
+    public static (string[] Lines, string Encoding, long Bytes) ReadAndDecodeFile(string path)
+    {
+        var fileInfo = new FileInfo(path);
+        long byteLength = fileInfo.Length;
+        byte[] bytes = File.ReadAllBytes(path);
+
+        string text;
+        string encoding;
+
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            encoding = "utf-8-bom";
+            text = Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+        }
+        else if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            encoding = "utf-16le";
+            text = Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
+        }
+        else if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            encoding = "utf-16be";
+            text = Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
+        }
+        else
+        {
+            try
+            {
+                var strictUtf8 = new UTF8Encoding(false, true);
+                text = strictUtf8.GetString(bytes);
+                encoding = "utf-8";
+            }
+            catch (DecoderFallbackException)
+            {
+                if (!_providerRegistered)
+                {
+                    Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+                    _providerRegistered = true;
+                }
+                var sjis = Encoding.GetEncoding(932);
+                text = sjis.GetString(bytes);
+                encoding = "shift_jis";
+            }
+        }
+
+        var lines = SplitLines(text);
+        return (lines, encoding, byteLength);
+    }
+
+    public static string[] SplitLines(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return [];
+        var lines = new List<string>();
+        using var reader = new StringReader(text);
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            lines.Add(line);
+        }
+        return lines.ToArray();
+    }
+
+    public static string DetermineKind(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".md" or ".mdx" or ".markdown" => "markdown",
+            ".cs" or ".vb" or ".ts" or ".tsx" or ".js" or ".jsx" or ".mjs" or ".cjs" or ".ps1" or ".psm1" or ".py" or ".go" or ".rs" or ".java" or ".kt" => "code",
+            ".json" or ".jsonc" => "json",
+            ".yml" or ".yaml" => "yaml",
+            _ => "text"
+        };
+    }
+
+    public static List<OutlineEntry> GetOutline(string path, string[] lines, string? kind = null)
+    {
+        kind ??= DetermineKind(path);
+        List<OutlineEntry> entries = kind switch
+        {
+            "markdown" => OutlineMarkdown(lines),
+            "code" => OutlineCode(lines),
+            "json" => OutlineJson(lines),
+            "yaml" => OutlineYaml(lines),
+            _ => OutlineText(lines)
+        };
+
+        if (entries.Count == 0 && lines.Length > 0 && kind != "text")
+        {
+            entries = OutlineText(lines);
+        }
+
+        return entries;
+    }
+
+    private static List<OutlineEntry> OutlineMarkdown(string[] lines)
+    {
+        var entries = new List<OutlineEntry>();
+        bool inFence = false;
+        string? fenceMarker = null;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            int lineNum = i + 1;
+            string line = lines[i];
+            string trimmedStart = line.TrimStart();
+
+            if (!inFence)
+            {
+                if (trimmedStart.StartsWith("```") || trimmedStart.StartsWith("~~~"))
+                {
+                    inFence = true;
+                    fenceMarker = trimmedStart.StartsWith("```") ? "```" : "~~~";
+                    continue;
+                }
+
+                var match = MarkdownHeadingRegex.Match(line);
+                if (match.Success)
+                {
+                    int level = match.Groups[1].Length;
+                    string title = match.Groups[2].Value.Trim();
+                    if (title.Length > 120) title = title[..120];
+                    entries.Add(new OutlineEntry(lineNum, lineNum, level, title));
+                }
+            }
+            else
+            {
+                if (trimmedStart.StartsWith(fenceMarker!))
+                {
+                    inFence = false;
+                    fenceMarker = null;
+                }
+            }
+        }
+
+        ComputeHierarchicalEnds(entries, lines.Length);
+        return entries;
+    }
+
+    private static List<OutlineEntry> OutlineCode(string[] lines)
+    {
+        var entries = new List<OutlineEntry>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            int lineNum = i + 1;
+            string line = lines[i];
+            string trimmed = line.Trim();
+
+            if (string.IsNullOrWhiteSpace(trimmed)) continue;
+            if (trimmed.StartsWith("//") || trimmed.StartsWith("'")) continue;
+            if (ControlKeywordsRegex.IsMatch(trimmed)) continue;
+
+            bool isMatch = false;
+            if (CodeTypeRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodeFunctionRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodeMethodRegex.IsMatch(trimmed) && !trimmed.EndsWith(';')) isMatch = true;
+            else if (CodePythonDefRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodeClassRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodeGoFuncRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodeRustFnRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodePwshFunctionRegex.IsMatch(trimmed)) isMatch = true;
+            else if (CodeVbRegex.IsMatch(trimmed)) isMatch = true;
+
+            if (isMatch)
+            {
+                int width = 0;
+                foreach (char c in line)
+                {
+                    if (c == ' ') width += 1;
+                    else if (c == '\t') width += 4;
+                    else break;
+                }
+
+                int level = (width / 4) + 1;
+                string title = trimmed.Length <= 120 ? trimmed : trimmed[..120];
+                entries.Add(new OutlineEntry(lineNum, lineNum, level, title));
+            }
+        }
+
+        ComputeHierarchicalEnds(entries, lines.Length);
+        return entries;
+    }
+
+    private static List<OutlineEntry> OutlineJson(string[] lines)
+    {
+        var entries = new List<OutlineEntry>();
+        int depth = 0;
+        int closingBraceLine = 0;
+        var rawKeys = new List<(int lineNum, string key)>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            int lineNum = i + 1;
+            string line = lines[i];
+
+            int depthAtKey = depth;
+            if (depth == 0 && line.TrimStart().StartsWith('{'))
+            {
+                depthAtKey = 1;
+            }
+
+            var match = JsonKeyRegex.Match(line);
+            if (match.Success && depthAtKey == 1)
+            {
+                string key = match.Groups[1].Value;
+                if (key.Length > 120) key = key[..120];
+                rawKeys.Add((lineNum, key));
+            }
+
+            bool inString = false;
+            bool escaped = false;
+            for (int ci = 0; ci < line.Length; ci++)
+            {
+                char c = line[ci];
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                }
+                else
+                {
+                    if (c == '"') inString = true;
+                    else if (c is '{' or '[') depth++;
+                    else if (c is '}' or ']')
+                    {
+                        depth--;
+                        if (depth == 0 && c == '}')
+                        {
+                            closingBraceLine = lineNum;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (int i = 0; i < rawKeys.Count; i++)
+        {
+            int start = rawKeys[i].lineNum;
+            string title = rawKeys[i].key;
+            int end = (i + 1 < rawKeys.Count)
+                ? rawKeys[i + 1].lineNum - 1
+                : (closingBraceLine > 0 ? closingBraceLine : lines.Length);
+            entries.Add(new OutlineEntry(start, Math.Max(start, end), 1, title));
+        }
+
+        return entries;
+    }
+
+    private static List<OutlineEntry> OutlineYaml(string[] lines)
+    {
+        var entries = new List<OutlineEntry>();
+        var rawEntries = new List<(int lineNum, string title)>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            int lineNum = i + 1;
+            string line = lines[i];
+
+            var match = YamlKeyRegex.Match(line);
+            if (match.Success)
+            {
+                string title = match.Groups[1].Value.Trim().Trim('"', '\'');
+                if (title.Length > 120) title = title[..120];
+                rawEntries.Add((lineNum, title));
+            }
+        }
+
+        for (int i = 0; i < rawEntries.Count; i++)
+        {
+            int start = rawEntries[i].lineNum;
+            string title = rawEntries[i].title;
+            int end = (i + 1 < rawEntries.Count) ? rawEntries[i + 1].lineNum - 1 : lines.Length;
+            entries.Add(new OutlineEntry(start, Math.Max(start, end), 1, title));
+        }
+
+        return entries;
+    }
+
+    private static List<OutlineEntry> OutlineText(string[] lines)
+    {
+        var entries = new List<OutlineEntry>();
+        for (int start = 1; start <= lines.Length; start += 100)
+        {
+            int end = Math.Min(start + 99, lines.Length);
+            entries.Add(new OutlineEntry(start, end, 1, $"lines {start}-{end}"));
+        }
+        return entries;
+    }
+
+    private static void ComputeHierarchicalEnds(List<OutlineEntry> entries, int totalLines)
+    {
+        for (int i = 0; i < entries.Count; i++)
+        {
+            int end = totalLines;
+            for (int j = i + 1; j < entries.Count; j++)
+            {
+                if (entries[j].Level <= entries[i].Level)
+                {
+                    end = entries[j].Start - 1;
+                    break;
+                }
+            }
+            entries[i].End = Math.Max(entries[i].Start, end);
+        }
+    }
+}

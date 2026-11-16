@@ -37,7 +37,8 @@ builder.Services.AddSingleton<ConcurrentPowerShellManager>();
 builder.Services.AddMcpServer()
     .WithStdioServerTransport()
     .WithTools<PowerShellTools>()
-    .WithTools<DiagnosticTools>();
+    .WithTools<DiagnosticTools>()
+    .WithTools<FileReadingTools>();
 
 using var host = builder.Build();
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();

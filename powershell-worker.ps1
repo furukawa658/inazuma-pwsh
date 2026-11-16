@@ -42,6 +42,11 @@ $initialSessionState.Variables.Add([System.Management.Automation.Runspaces.Sessi
 $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($initialSessionState)
 $runspace.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
 $runspace.Open()
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {}
+$runspace.SessionStateProxy.SetVariable('OutputEncoding', [System.Text.UTF8Encoding]::new($false))
 
 function Close-PythonStdin([System.Management.Automation.Language.ScriptBlockAst]$syntax, [string]$script, $rs) {
     $declaredFunctions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -272,6 +277,17 @@ try {
                 $errors.Add("Native command exited with code $exitCode.")
             }
 
+            # Redirected native stderr (2>&1) arrives as ErrorRecord; keep only its text instead of the full object graph.
+            $rawOutputCollection = $outputCollection
+            $outputCollection = [System.Collections.Generic.List[psobject]]::new()
+            foreach ($item in $rawOutputCollection) {
+                if ($item -is [System.Management.Automation.ErrorRecord]) {
+                    $outputCollection.Add([psobject]$item.ToString())
+                } else {
+                    $outputCollection.Add($item)
+                }
+            }
+
             $allStrings = $true
             $outputStrings = [System.Collections.Generic.List[string]]::new()
             foreach ($item in $outputCollection) {
@@ -327,7 +343,7 @@ try {
                 }
             }
 
-            try { $ps.Dispose(); $outputCollection.Dispose() } catch {}
+            try { $ps.Dispose(); $rawOutputCollection.Dispose() } catch {}
 
             $resObj = @{
                 type = "result"

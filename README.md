@@ -4,19 +4,39 @@
 
 **Keep your PowerShell setup between calls. Get the results your coding agent needs.**
 
-InazumaPwsh connects your VS Code coding agent to persistent local PowerShell sessions on Windows x64. Reuse variables, loaded modules, and your working location across tool calls. Investigate .NET build errors and Playwright, bun test, pytest, and Vitest failures through structured diagnostics, with full logs available when you need the details.
+InazumaPwsh connects your VS Code coding agent to persistent local PowerShell sessions on Windows x64. Reuse variables, loaded modules, and your working location across tool calls. Investigate .NET build errors and Playwright, bun test, pytest, and Vitest failures through structured diagnostics, and read large files and logs by outline, section, or summary, with full logs available when you need the details.
 
 It is built for Windows automation, .NET development, and projects that use Playwright, bun test, pytest, or Vitest.
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-Three test runner tools join `run_dotnet_build` and `run_playwright`. Instead of reading raw terminal output, your agent receives test counts and a list of failures with file, line, and message.
+0.4.0 helps your agent read less to find what it needs, and removes wasted characters from every response.
 
-- **`run_bun_test`** runs `bun test` and reads its JUnit XML report, including stack traces.
-- **`run_pytest`** runs pytest and reads its JUnit XML report. It finds the nearest `.venv` automatically, or you can pass `pythonPath`.
-- **`run_vitest`** runs locally installed Vitest once (`vitest run`) and reads its JSON report, including file-level errors such as import failures.
+### New file-reading tools
 
-All three return the same status values: `success`, `error` (failed tests or a failed run), `no_tests`, or `report_unavailable`. A run without a usable report is never reported as `success`. Responses are limited to 8,000 characters and list at most 10 failures; the full log is saved for follow-up searches.
+Instead of loading a whole file into the conversation, your agent can look at its structure first and then read only the part it needs.
+
+- **`peek_file`** returns the file type, encoding, line count, and an outline with line ranges: Markdown headings (code fences ignored), C#/TypeScript/JavaScript/PowerShell/Python/Go/Rust/VB declarations, JSON keys, and YAML keys. It also recommends `FULL` for short files (200 lines or fewer by default) or `PARTIAL` for longer ones.
+- **`read_section`** returns one outline entry found by a title search (`query`), or an explicit `startLine`/`endLine` range, with line numbers. Long ranges stop at `maxChars` and give the `nextLine` to continue from.
+- **`summarize_log`** groups lines that match a pattern (by default `error|fail|exception|fatal|warn`) after replacing digits, so repeated errors appear once with a count, first and last line, and context. It also returns the last lines of the log. Use it on build logs or on a `fullLogPath`.
+
+All three require an existing absolute path, accept files up to 50 MB, read UTF-8 (with or without BOM) and UTF-16 with BOM, and fall back to Shift_JIS for non-UTF-8 text. `summarize_log` also strips ANSI color codes.
+
+Measured examples: on a 68,000-character Markdown design document, `peek_file` returned 7% of the original characters, and `peek_file` plus one `read_section` call returned 20%. On a 137,000-character execution log, `summarize_log` returned 1%. These are single-file measurements; savings across complete chats have not been measured.
+
+### Smaller responses
+
+- **No unnecessary escaping.** Responses previously escaped quotes, `<`, `>`, `&`, `+`, and every non-ASCII character as `\uXXXX`, so each Japanese character took six characters. Responses now keep these characters as-is; quotes inside strings use the shorter `\"`.
+- **`compactResponse` now defaults to `true`.** `output` is omitted when it exactly duplicates `data`. Pass `compactResponse: false` to always receive `output`. This is a behavior change.
+- **Redirected stderr stays plain text.** Native command stderr merged with `2>&1` was returned as a fully serialized error object, often thousands of characters per line. It is now returned as the line's text.
+
+### Fixes
+
+- **Japanese output from native commands.** Workers now set the console input and output encoding to UTF-8, so output from commands such as `git log` is no longer garbled.
+
+### Earlier: 0.3.0
+
+`run_bun_test`, `run_pytest`, and `run_vitest` joined `run_dotnet_build` and `run_playwright`. They return test counts and failures with file, line, and message, using the status values `success`, `error`, `no_tests`, or `report_unavailable`. A run without a usable report is never reported as `success`. Responses are limited to 8,000 characters and list at most 10 failures; the full log is saved for follow-up searches.
 
 ## Why use InazumaPwsh?
 
@@ -37,6 +57,8 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "Run the pytest suite with InazumaPwsh and fix the first failure."
 - "Run `bun test` with InazumaPwsh and show me the failing files and lines."
 - "Run Vitest with InazumaPwsh for `src/utils` only and explain why the import failed."
+- "Peek at this design document with InazumaPwsh, then read only the section about approvals."
+- "Summarize the errors in this build log with InazumaPwsh before opening it."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
@@ -63,6 +85,9 @@ The InazumaPwsh project code is licensed under the MIT License, copyright 2026 S
 | `run_bun_test` | Run `bun test` and return test counts and failures with file, line, message, and stack from its JUnit XML report. |
 | `run_pytest` | Run pytest and return test counts and failures with file, line, and message from its JUnit XML report. |
 | `run_vitest` | Run locally installed Vitest once (`vitest run`) and return test counts, failures, and file-level errors from its JSON report. |
+| `peek_file` | Return a text file's type, encoding, line count, outline with line ranges, and a `FULL` or `PARTIAL` reading recommendation. |
+| `read_section` | Return one outline entry by title search, or a line range, with line numbers and a `nextLine` for continuation. |
+| `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 
 ## Sessions and output
 
@@ -78,7 +103,7 @@ There are at most six sessions, including `default`. Idle non-default sessions e
 
 `maxOutputChars` limits `output` to 1,000 through 50,000 characters, with a default of 6,000. When output is truncated, `data` is null and the full log is saved locally. This limit does not bound the full JSON response or memory used by a script. Return only the data you need.
 
-Set `compactResponse` to `true` to omit `output` when it exactly duplicates `data`. The default is `false`; truncated or differing output is retained. The effect on model tokens and credits has not been measured for complete chats; do not assert unmeasured token or cost savings.
+`compactResponse` defaults to `true` and omits `output` when it exactly duplicates `data`. Set it to `false` to always include `output`. Truncated or differing output is retained. The effect on model tokens and credits has not been measured for complete chats; do not assert unmeasured token or cost savings.
 
 Python executables invoked without pipeline input receive closed standard input. Existing pipelines are preserved. Detection applies to command names that resolve to executables before execution, such as `python`, `python3`, and `py`; dynamic names and aliases changed during execution are not guaranteed. Interactive Python input is not supported.
 
@@ -106,8 +131,8 @@ From the project directory:
 dotnet build InazumaPwsh.csproj --nologo -v:q
 node test-mcp.mjs
 $sourceRoot = (Get-Location).Path
-dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.3.0 --nologo -v:q
-node test-mcp.mjs artifacts/win-x64-0.3.0/InazumaPwsh.exe
+dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.4.0 --nologo -v:q
+node test-mcp.mjs artifacts/win-x64-0.4.0/InazumaPwsh.exe
 ```
 
 Reproducibility requires the same source, SDK, runtime, dependencies, and build settings. Path mapping alone is not a guarantee across builds.
