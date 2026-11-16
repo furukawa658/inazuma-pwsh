@@ -122,15 +122,15 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         Func<string, CancellationToken, Task<string>> action, CancellationToken cancellationToken)
     {
         if (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory))
-            return JsonSerializer.Serialize(new { status = "error", message = "workingDirectory must be an existing absolute directory." });
+            return JsonDefaults.Serialize(new { status = "error", message = "workingDirectory must be an existing absolute directory." });
         var directory = Path.Combine(Path.GetTempPath(), $"inazuma-diagnostics-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.ApplicationStopping);
         try { return await action(directory, linked.Token); }
-        catch (OperationCanceledException) { return JsonSerializer.Serialize(new { status = "cancelled" }); }
+        catch (OperationCanceledException) { return JsonDefaults.Serialize(new { status = "cancelled" }); }
         catch (Exception exception) when (exception is IOException or ArgumentException or System.ComponentModel.Win32Exception)
         {
-            return JsonSerializer.Serialize(new { status = "error", message = exception.Message });
+            return JsonDefaults.Serialize(new { status = "error", message = exception.Message });
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
@@ -180,7 +180,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         if (result["status"]?.GetValue<string>() != "success")
             result["output"] = (await OutputCompressor.CompressAsync(execution.Tail, 1500)).Content;
 
-        var json = result.ToJsonString();
+        var json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;
 
         if (result.TryGetPropertyValue("output", out var outNode))
@@ -189,7 +189,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             if (outStr.Length > 300)
             {
                 result["output"] = string.Concat(outStr.AsSpan(0, 300), "...");
-                json = result.ToJsonString();
+                json = result.ToJsonString(JsonDefaults.Options);
                 if (json.Length <= 8000) return json;
             }
         }
@@ -224,7 +224,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             gArr.Add(first);
         }
 
-        json = result.ToJsonString();
+        json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;
 
         if (result.TryGetPropertyValue("failures", out var fNode2) && fNode2 is JsonArray fArr2 && fArr2.Count > 0 && fArr2[0] is JsonObject fObj)
@@ -249,9 +249,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             }
         }
 
-        json = result.ToJsonString();
+        json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;
-        return JsonSerializer.Serialize(new
+        return JsonDefaults.Serialize(new
         {
             status = result["status"]?.GetValue<string>() is { } status ? status[..Math.Min(status.Length, 50)] : "error",
             exitCode = execution.ExitCode,

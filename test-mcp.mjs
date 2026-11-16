@@ -60,6 +60,12 @@ async function call(script, extra = {}) {
     return result(await request('tools/call', { name: 'execute_powershell', arguments: { script, ...extra } }).response);
 }
 
+async function rawCall(script, extra = {}) {
+    const message = await request('tools/call', { name: 'execute_powershell', arguments: { script, ...extra } }).response;
+    assert.equal(message.error, undefined, JSON.stringify(message.error));
+    return message.result.content.find(item => item.type === 'text').text;
+}
+
 const fixture = await mkdtemp(path.join(tmpdir(), 'inazuma-test-'));
 const literal = value => `'${value.replaceAll("'", "''")}'`;
 async function tool(name, args) {
@@ -85,7 +91,7 @@ try {
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
     await check('public tool descriptions are in English', async () => {
-        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest']) {
+        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'peek_file', 'read_section', 'summarize_log']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
             assert.ok(definition?.description, `${name} is missing a description`);
             assert.match(definition.description, /^[\x00-\x7f]+$/, `${name} description is not English`);
@@ -93,6 +99,157 @@ try {
                 if (schema.description) assert.match(schema.description, /^[\x00-\x7f]+$/, `${name}.${parameter} description is not English`);
             }
         }
+    });
+    await check('responses do not escape quotes or Japanese', async () => {
+        const raw = await rawCall(`'say "hi" 日本語'`, { compactResponse: false });
+        assert.ok(!/\\u[0-9a-fA-F]{4}/.test(raw), raw);
+        assert.ok(raw.includes('日本語'), raw);
+    });
+    await check('compactResponse defaults to true', async () => {
+        const response = await call('42');
+        assert.equal(response.data, 42);
+        assert.equal(response.output, null);
+    });
+    await check('native UTF-8 output is decoded', async () => {
+        const response = await call(`& ${literal(process.execPath)} -e "process.stdout.write(Buffer.from('e697a5e69cace8aa9e','hex'))"`);
+        assert.equal(response.data, '日本語', JSON.stringify(response));
+    });
+    await check('redirected native stderr stays plain text', async () => {
+        const raw = await rawCall(`& ${literal(process.execPath)} -e "console.log('out');console.error('err-line')" 2>&1`);
+        const response = JSON.parse(raw);
+        assert.deepEqual(response.data, ['out', 'err-line'], raw);
+        assert.ok(raw.length < 1000, `response too large: ${raw.length}`);
+    });
+    await check('peek_file outlines markdown and recommends partial reads', async () => {
+        const sections = [];
+        for (let i = 1; i <= 30; i++) {
+            sections.push(`## Section ${i}`);
+            for (let j = 1; j <= 10; j++) {
+                if (i === 3 && j === 5) {
+                    sections.push('```');
+                    sections.push('# not a heading');
+                    sections.push('```');
+                    j += 2;
+                } else {
+                    sections.push(`body ${i}-${j} lorem ipsum dolor sit amet`);
+                }
+            }
+        }
+        const mdContent = sections.join('\n');
+        const docPath = path.join(fixture, 'doc.md');
+        await writeFile(docPath, mdContent);
+
+        const result = await tool('peek_file', { path: docPath });
+        assert.equal(result.kind, 'markdown');
+        assert.equal(result.recommend, 'PARTIAL');
+        assert.equal(result.entries.length, 30);
+        assert.equal(result.entries[0].title, 'Section 1');
+        assert.equal(result.entries[0].start, 1);
+        assert.equal(result.entries[0].end, 11);
+        assert.ok(!result.entries.some(e => e.title.includes('not a heading')));
+
+        const ratio = JSON.stringify(result).length / mdContent.length;
+        console.log(`PEEK_RATIO ${ratio.toFixed(3)}`);
+        assert.ok(ratio < 0.35, `Expected ratio < 0.35, got ${ratio}`);
+    });
+    await check('read_section returns only the requested section', async () => {
+        const docPath = path.join(fixture, 'doc.md');
+        const sec12Start = 1 + (12 - 1) * 11;
+        const sec12 = await tool('read_section', { path: docPath, query: 'section 12' });
+        assert.equal(sec12.startLine, sec12Start);
+        assert.ok(sec12.text.startsWith(`${sec12Start}: ## Section 12`));
+        assert.ok(!sec12.text.includes('Section 13'));
+        assert.equal(sec12.truncated, false);
+        assert.equal(sec12.nextLine, null);
+
+        const rangeShort = await tool('read_section', { path: docPath, startLine: 1, endLine: 3, maxChars: 1000 });
+        assert.equal(rangeShort.text.split('\n').length, 3);
+
+        const rangeLong = await tool('read_section', { path: docPath, startLine: 1, endLine: 330, maxChars: 1000 });
+        assert.equal(rangeLong.truncated, true);
+        assert.ok(rangeLong.nextLine > 1);
+    });
+    await check('peek_file outlines C# and falls back for text', async () => {
+        const csPath = path.join(fixture, 'Sample.cs');
+        const csCode = [
+            'namespace MyNamespace;',
+            '',
+            'public class SampleClass',
+            '{',
+            '    public void MethodOne()',
+            '    {',
+            '        if (true) return;',
+            '    }',
+            '',
+            '    private int MethodTwo(int value)',
+            '    {',
+            '        return value * 2;',
+            '    }',
+            '}'
+        ].join('\n');
+        await writeFile(csPath, csCode);
+
+        const csResult = await tool('peek_file', { path: csPath });
+        const titles = csResult.entries.map(e => e.title);
+        assert.ok(titles.some(t => t.includes('SampleClass')));
+        assert.ok(titles.some(t => t.includes('MethodOne')));
+        assert.ok(titles.some(t => t.includes('MethodTwo')));
+        assert.ok(!titles.some(t => t.startsWith('if')));
+
+        const txtPath = path.join(fixture, 'plain.txt');
+        const txtLines = Array.from({ length: 250 }, (_, i) => `line ${i + 1}`);
+        await writeFile(txtPath, txtLines.join('\n'));
+
+        const txtResult = await tool('peek_file', { path: txtPath });
+        assert.equal(txtResult.kind, 'text');
+        assert.equal(txtResult.entries.length, 3);
+    });
+    await check('read_section decodes Shift_JIS', async () => {
+        const sjisPath = path.join(fixture, 'sjis.txt');
+        await writeFile(sjisPath, Buffer.from('93fa967b8cea0d0a328d7396da', 'hex'));
+        const sjisResult = await tool('read_section', { path: sjisPath, startLine: 1, endLine: 2 });
+        assert.equal(sjisResult.encoding, 'shift_jis');
+        assert.equal(sjisResult.text, '1: 日本語\n2: 2行目');
+    });
+    await check('summarize_log groups repeated errors', async () => {
+        const logPath = path.join(fixture, 'build.log');
+        const lines = [];
+        let firstErrorLine = -1;
+        let errorCount = 0;
+
+        for (let i = 1; i <= 500; i++) {
+            if (i === 500) {
+                lines.push('done');
+            } else if (i === 250) {
+                lines.push('FATAL crash');
+            } else if (errorCount < 40 && (i % 12 === 0 || (500 - i <= 40 - errorCount))) {
+                if (firstErrorLine === -1) firstErrorLine = i;
+                lines.push(`error CS1002: ; expected at line ${i}`);
+                errorCount++;
+            } else {
+                lines.push(`info step ${i}`);
+            }
+        }
+        assert.equal(errorCount, 40);
+        assert.equal(lines.length, 500);
+
+        const logContent = lines.join('\n');
+        await writeFile(logPath, logContent);
+
+        const logResult = await tool('summarize_log', { path: logPath });
+        assert.equal(logResult.groups[0].count, 40);
+        assert.equal(logResult.groups[0].firstLine, firstErrorLine);
+        assert.ok(logResult.groups.some(g => g.text.includes('FATAL') && g.count === 1));
+        assert.ok(logResult.tail[logResult.tail.length - 1].endsWith('done'));
+        const jsonLength = JSON.stringify(logResult).length;
+        assert.ok(jsonLength < 4000, `Expected JSON length < 4000, got ${jsonLength}`);
+
+        const ratio = jsonLength / logContent.length;
+        console.log(`LOG_RATIO ${ratio.toFixed(3)}`);
+    });
+    await check('file tools reject relative paths', async () => {
+        const res = await tool('peek_file', { path: 'relative.md' });
+        assert.equal(res.status, 'error');
     });
     const warmTimings = [];
     for (let sample = 0; sample < 5; sample++) {
@@ -163,7 +320,7 @@ try {
     });
     await check('compact response preserves content and reduces duplication', async () => {
         const script = "'sample-' * 200";
-        const regular = await call(script);
+        const regular = await call(script, { compactResponse: false });
         const compact = await call(script, { compactResponse: true });
         assert.equal(compact.data, regular.data);
         assert.equal(compact.output, null);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -20,7 +21,12 @@ public static class PlaywrightResultParser
     private record Stats([property: JsonPropertyName("duration")] double Duration, [property: JsonPropertyName("passed")] int Passed, [property: JsonPropertyName("failed")] int Failed, [property: JsonPropertyName("flaky")] int Flaky, [property: JsonPropertyName("skipped")] int Skipped, [property: JsonPropertyName("total")] int Total);
     private record PlaywrightReport([property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("exitCode")] int ExitCode, [property: JsonPropertyName("stats")] Stats Stats, [property: JsonPropertyName("globalErrors")] List<string> GlobalErrors, [property: JsonPropertyName("failures")] List<Failure> Failures);
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, WriteIndented = false };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     public static async Task<string> ParseAsync(string reportPath, string workingDirectory, int exitCode, bool includeWarnings = false, CancellationToken cancellationToken = default)
     {

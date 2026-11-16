@@ -29,8 +29,8 @@ public sealed class PowerShellTools
         int maxOutputChars = 6000,
         [Description("A unique, stable ID for each chat, up to 64 letters, digits, hyphens or underscores. If omitted, the shared default session is used.")]
         string? sessionId = null,
-        [Description("When true, omit output if it exactly duplicates data. Truncated or differing output is retained.")]
-        bool compactResponse = false,
+        [Description("When true (default), omit output if it exactly duplicates data. Set false to always include output. Truncated or differing output is retained.")]
+        bool compactResponse = true,
         CancellationToken cancellationToken = default)
     {
         return await _session.ExecuteAsync(script, workingDirectory, Math.Clamp(timeoutSeconds, 1, 300),
