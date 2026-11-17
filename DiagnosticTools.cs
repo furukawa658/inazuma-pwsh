@@ -10,13 +10,14 @@ namespace InazumaPwsh;
 public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
 {
     private const string ContextLinesText = "Number of source lines (0 to 10) shown before and after each failure location as codeContext. 0 omits it.";
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> TscBaselines = new();
 
     [McpServerTool(Name = "run_dotnet_build")]
     [Description("Run dotnet build and return concise SARIF diagnostics and the exit code. The full log is saved to fullLogPath. Diagnostics for different projects are written to separate files.")]
     public Task<string> RunDotnetBuildAsync(
         [Description("Absolute path to the working directory.") ] string workingDirectory,
         [Description("Optional project or solution path, not a command string.") ] string? target = null,
-        bool includeWarnings = false, int timeoutSeconds = 120, CancellationToken cancellationToken = default) =>
+        bool includeWarnings = false, int timeoutSeconds = 120, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
         RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             var propsPath = Path.Combine(directory, "diagnostics.props");
@@ -32,7 +33,26 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             arguments.AddRange(["--nologo", "-v:q", $"-p:CustomAfterMicrosoftCommonTargets={propsPath}"]);
             var execution = await NativeProcessRunner.RunAsync("dotnet", arguments, workingDirectory, timeoutSeconds, null, token);
             var report = await DotnetBuildParser.ParseAsync(directory, workingDirectory, execution.ExitCode, includeWarnings, token);
-            return await CombineAsync(report, execution, workingDirectory, 0);
+            return await CombineAsync("run_dotnet_build", report, execution, workingDirectory, contextLines);
+        }, cancellationToken);
+
+    [McpServerTool(Name = "run_dotnet_test")]
+    [Description("Run dotnet test and return failures and counts from its TRX reports. Uses VSTest options, or Microsoft.Testing.Platform options when global.json selects that runner (the test project then needs the TRX report extension). Dependencies are not installed automatically.")]
+    public Task<string> RunDotnetTestAsync(string workingDirectory,
+        [Description("Arguments passed to dotnet test, with each argument as a separate array element, for example a project path or --filter.") ] string[]? testArgs = null,
+        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
+        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        {
+            RejectManagedArguments(testArgs, "--logger", "-l", "--results-directory", "--report-trx");
+            var testingPlatform = UsesTestingPlatform(workingDirectory);
+            var arguments = new List<string> { "test" };
+            arguments.AddRange(testingPlatform ? ["--report-trx"] : ["--nologo", "--logger", "trx"]);
+            arguments.AddRange(["--results-directory", directory]);
+            arguments.AddRange(testArgs ?? []);
+            var execution = await NativeProcessRunner.RunAsync("dotnet", arguments, workingDirectory, timeoutSeconds,
+                new Dictionary<string, string> { ["DOTNET_CLI_UI_LANGUAGE"] = "en", ["DOTNET_NOLOGO"] = "1" }, token);
+            var report = await TestReportParser.ParseTrxAsync(directory, workingDirectory, execution.ExitCode, token);
+            return await CombineAsync("run_dotnet_test", report, execution, workingDirectory, contextLines, testingPlatform ? null : DotnetFilter);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_playwright")]
@@ -53,7 +73,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["PLAYWRIGHT_JSON_OUTPUT_NAME"] = reportPath, ["FORCE_COLOR"] = "0", ["CI"] = "1" }, token);
             var report = await PlaywrightResultParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, cancellationToken: token);
-            return await CombineAsync(report, execution, workingDirectory, contextLines);
+            return await CombineAsync("run_playwright", report, execution, workingDirectory, contextLines, result => HasFailures(result) ? ["--last-failed"] : null);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_bun_test")]
@@ -71,7 +91,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync("bun", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["NO_COLOR"] = "1" }, token);
             var report = await TestReportParser.ParseJUnitAsync(reportPath, workingDirectory, execution.ExitCode, cancellationToken: token);
-            return await CombineAsync(report, execution, workingDirectory, contextLines);
+            return await CombineAsync("run_bun_test", report, execution, workingDirectory, contextLines, FailedFiles);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_pytest")]
@@ -91,7 +111,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync(python, arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONIOENCODING"] = "utf-8", ["NO_COLOR"] = "1" }, token);
             var report = await TestReportParser.ParseJUnitAsync(reportPath, workingDirectory, execution.ExitCode, noTestsExitCode: 5, cancellationToken: token);
-            return await CombineAsync(report, execution, workingDirectory, contextLines);
+            return await CombineAsync("run_pytest", report, execution, workingDirectory, contextLines, result => HasFailures(result) ? ["--lf"] : null);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_vitest")]
@@ -111,7 +131,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["CI"] = "1" }, token);
             var report = await TestReportParser.ParseVitestAsync(reportPath, workingDirectory, execution.ExitCode, token);
-            return await CombineAsync(report, execution, workingDirectory, contextLines);
+            return await CombineAsync("run_vitest", report, execution, workingDirectory, contextLines, FailedFiles);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_tsc")]
@@ -119,7 +139,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunTscAsync(string workingDirectory,
         [Description("Arguments passed to tsc, with each argument as a separate array element, for example -p tsconfig.app.json.") ] string[]? tscArgs = null,
         [Description("Optional absolute path to tsc.js.") ] string? tscPath = null,
-        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
+        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0,
+        [Description("When true, list only diagnostics absent from the previous run with the same workingDirectory and tscArgs in this server process, and add newCount and fixedCount.")] bool onlyNew = false,
+        CancellationToken cancellationToken = default) =>
         RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(tscArgs, "--pretty", "--noEmit", "--watch", "-w", "--preserveWatchOutput", "--init");
@@ -138,8 +160,35 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             arguments.AddRange(["--pretty", "false"]);
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["NO_COLOR"] = "1" }, token);
-            var report = TscReportParser.Parse(execution.FullLogPath, workingDirectory, execution.ExitCode);
-            return await CombineAsync(report, execution, workingDirectory, contextLines);
+            var baselineKey = workingDirectory + "\n" + string.Join("\n", tscArgs ?? []);
+            TscBaselines.TryGetValue(baselineKey, out var previous);
+            var report = TscReportParser.Parse(execution.FullLogPath, workingDirectory, execution.ExitCode, onlyNew ? previous : null, out var current);
+            if (execution.Status == "completed" && current != null)
+            {
+                if (TscBaselines.Count >= 20 && !TscBaselines.ContainsKey(baselineKey)) TscBaselines.Clear();
+                TscBaselines[baselineKey] = current;
+            }
+            return await CombineAsync("run_tsc", report, execution, workingDirectory, contextLines);
+        }, cancellationToken);
+
+    [McpServerTool(Name = "run_eslint")]
+    [Description("Run a locally installed ESLint and return error and warning counts, per-rule counts and the first 15 problems (errors first) from its JSON report. Dependencies are not installed automatically.")]
+    public Task<string> RunEslintAsync(string workingDirectory,
+        [Description("Arguments passed to eslint, with each argument as a separate array element, for example src or --quiet. Defaults to the current directory.") ] string[]? eslintArgs = null,
+        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
+        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        {
+            RejectManagedArguments(eslintArgs, "--format", "-f", "--output-file", "-o");
+            var cli = FindPackageFile(workingDirectory, ["eslint"], Path.Combine("bin", "eslint.js"));
+            if (cli == null) throw new FileNotFoundException("Local ESLint CLI was not found. Install project dependencies first.");
+            var reportPath = Path.Combine(directory, "eslint.json");
+            var arguments = new List<string> { cli };
+            arguments.AddRange(eslintArgs is { Length: > 0 } ? eslintArgs : ["."]);
+            arguments.AddRange(["--format", "json", "--output-file", reportPath]);
+            var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
+                new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["NO_COLOR"] = "1" }, token);
+            var report = await EslintReportParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, token);
+            return await CombineAsync("run_eslint", report, execution, workingDirectory, contextLines);
         }, cancellationToken);
 
     [McpServerTool(Name = "inspect_playwright_trace")]
@@ -203,7 +252,63 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         return "python";
     }
 
-    private static async Task<string> CombineAsync(string report, NativeProcessRunner.Result execution, string workingDirectory, int contextLines)
+    private static bool UsesTestingPlatform(string workingDirectory)
+    {
+        for (var directory = new DirectoryInfo(workingDirectory); directory != null; directory = directory.Parent)
+        {
+            var file = Path.Combine(directory.FullName, "global.json");
+            if (!File.Exists(file)) continue;
+            try
+            {
+                var options = new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+                using var document = JsonDocument.Parse(File.ReadAllText(file), options);
+                return document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("test", out var test) && test.ValueKind == JsonValueKind.Object
+                    && test.TryGetProperty("runner", out var runner) && runner.ValueKind == JsonValueKind.String
+                    && runner.GetString() == "Microsoft.Testing.Platform";
+            }
+            catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException) { return false; }
+        }
+        return false;
+    }
+
+    private static bool HasFailures(JsonObject result) => result["failures"] is JsonArray { Count: > 0 };
+
+    private static bool ListsEveryFailure(JsonObject result, out List<JsonObject> failures)
+    {
+        failures = result["failures"] is JsonArray array ? array.OfType<JsonObject>().ToList() : [];
+        return failures.Count > 0 && result["globalErrors"] is not JsonArray { Count: > 0 }
+            && result["stats"]?["failed"]?.GetValue<int>() <= failures.Sum(failure => failure["count"]?.GetValue<int>() ?? 1);
+    }
+
+    private static string[]? FailedFiles(JsonObject result)
+    {
+        if (!ListsEveryFailure(result, out var failures)) return null;
+        var files = failures.Select(failure => failure["file"]?.GetValue<string>() ?? "").Distinct().ToArray();
+        return files.Any(file => file.Length == 0 || file.EndsWith("...", StringComparison.Ordinal)) ? null : files;
+    }
+
+    private static string[]? DotnetFilter(JsonObject result)
+    {
+        if (!ListsEveryFailure(result, out var failures)) return null;
+        var names = failures.Select(failure => (failure["title"]?.GetValue<string>() ?? "").Split('(')[0].Trim()).Distinct().ToArray();
+        if (names.Any(name => name.Length == 0 || name.EndsWith("...", StringComparison.Ordinal))) return null;
+        var escaped = names.Select(name => "FullyQualifiedName~" + System.Text.RegularExpressions.Regex.Replace(name, @"[\\&|=!~]", @"\$0"));
+        return ["--filter", string.Join("|", escaped)];
+    }
+
+    private static async Task<string> CombineAsync(string tool, string report, NativeProcessRunner.Result execution, string workingDirectory,
+        int contextLines, Func<JsonObject, string[]?>? rerun = null)
+    {
+        var json = await CombineAsync(report, execution, workingDirectory, contextLines, rerun);
+        long sourceBytes = report.Length;
+        try { sourceBytes += new FileInfo(execution.FullLogPath).Length; } catch (IOException) { }
+        UsageLog.Record(tool, sourceBytes, json.Length);
+        return json;
+    }
+
+    private static async Task<string> CombineAsync(string report, NativeProcessRunner.Result execution, string workingDirectory, int contextLines,
+        Func<JsonObject, string[]?>? rerun)
     {
         report = CodeContext.Add(report, workingDirectory, contextLines);
         var result = JsonNode.Parse(report)!.AsObject();
@@ -211,7 +316,11 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         result["fullLogPath"] = execution.FullLogPath;
         result["durationMs"] = execution.DurationMs;
         if (result["status"]?.GetValue<string>() != "success")
+        {
+            if (rerun?.Invoke(result) is { Length: > 0 } rerunArgs)
+                result["rerunArgs"] = new JsonArray(rerunArgs.Select(argument => (JsonNode?)JsonValue.Create(argument)).ToArray());
             result["output"] = (await OutputCompressor.CompressAsync(execution.Tail, 1500)).Content;
+        }
 
         var json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;

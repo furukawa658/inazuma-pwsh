@@ -11,7 +11,7 @@ internal static class CodeContext
     private const int MaxLineChars = 160;
     private const long MaxFileBytes = 2L * 1024 * 1024;
     private static readonly string[] ExcludedSegments = ["node_modules", ".venv", "site-packages"];
-    private static readonly string[] ItemArrays = ["failures", "diagnostics"];
+    private static readonly string[] ItemArrays = ["failures", "diagnostics", "errors"];
 
     public static string Add(string report, string workingDirectory, int contextLines)
     {
@@ -43,7 +43,7 @@ internal static class CodeContext
 
     private static string? Read(JsonObject item, string workingDirectory, int radius, int budget)
     {
-        var file = item["file"]?.GetValue<string>();
+        var file = (item["file"] ?? item["path"])?.GetValue<string>();
         var line = item["line"]?.GetValue<int>() ?? 0;
         if (string.IsNullOrEmpty(file) || line <= 0) return null;
         var path = Path.GetFullPath(file, workingDirectory);

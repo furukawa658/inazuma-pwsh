@@ -14,7 +14,8 @@ internal static partial class TscReportParser
 
     private sealed record Diagnostic(string? File, int Line, int Column, string Code, string Message);
 
-    public static string Parse(string logPath, string workingDirectory, int exitCode)
+    /// <summary>When previous is given, only diagnostics absent from it are listed.</summary>
+    public static string Parse(string logPath, string workingDirectory, int exitCode, IReadOnlySet<string>? previous, out HashSet<string>? current)
     {
         var diagnostics = new List<Diagnostic>();
         var truncatedLog = false;
@@ -42,7 +43,12 @@ internal static partial class TscReportParser
         var status = diagnostics.Count > 0 ? "error"
             : truncatedLog || exitCode != 0 ? (exitCode == 0 ? "report_unavailable" : "error")
             : "success";
-        var shown = diagnostics.Take(MaxDiagnostics).Select(d => new
+        // Line numbers are left out of the key because edits above a diagnostic shift them.
+        static string Key(Diagnostic d) => $"{d.File}|{d.Code}|{d.Message}";
+        var keys = truncatedLog ? null : diagnostics.Select(Key).ToHashSet();
+        current = keys;
+        var listed = previous == null ? diagnostics : diagnostics.Where(d => !previous.Contains(Key(d))).ToList();
+        var shown = listed.Take(MaxDiagnostics).Select(d => new
         {
             file = d.File == null ? null : PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(d.File, workingDirectory), 300),
             line = d.Line == 0 ? (int?)null : d.Line,
@@ -56,8 +62,10 @@ internal static partial class TscReportParser
             exitCode,
             errorCount = diagnostics.Count,
             errorCodeCounts = counts,
+            newCount = previous == null ? (int?)null : listed.Count,
+            fixedCount = previous == null || keys == null ? (int?)null : previous.Count(key => !keys.Contains(key)),
             diagnostics = shown,
-            omitted = Math.Max(0, diagnostics.Count - MaxDiagnostics)
+            omitted = Math.Max(0, listed.Count - MaxDiagnostics)
         }, JsonDefaults.OptionsIgnoreNull);
     }
 }

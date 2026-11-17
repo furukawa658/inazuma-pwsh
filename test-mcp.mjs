@@ -95,7 +95,7 @@ try {
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
     await check('public tool descriptions are in English', async () => {
-        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'peek_file', 'read_section', 'summarize_log']) {
+        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
             assert.ok(definition?.description, `${name} is missing a description`);
             assert.match(definition.description, /^[\x00-\x7f]+$/, `${name} description is not English`);
@@ -433,10 +433,11 @@ try {
         await mkdir(project);
         await writeFile(path.join(project, 'Probe.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType></PropertyGroup></Project>');
         await writeFile(path.join(project, 'Program.cs'), 'MissingThing();');
-        const failed = await tool('run_dotnet_build', { workingDirectory: project });
+        const failed = await tool('run_dotnet_build', { workingDirectory: project, contextLines: 1 });
         assert.equal(failed.status, 'error', JSON.stringify(failed));
         assert.notEqual(failed.exitCode, 0);
         assert.ok(failed.errors.some(error => error.ruleId === 'CS0103'), JSON.stringify(failed));
+        assert.equal(failed.errors.find(error => error.ruleId === 'CS0103').codeContext, '>1| MissingThing();', JSON.stringify(failed));
         assert.ok((await stat(failed.fullLogPath)).size > 0);
         await writeFile(path.join(project, 'Program.cs'), 'System.Console.WriteLine("ok");');
         const success = await tool('run_dotnet_build', { workingDirectory: project });
@@ -691,6 +692,149 @@ process.exitCode = 1;
         await rm(built.fullLogPath);
         assert.equal((await tool('run_tsc', { workingDirectory: fixture })).status, 'error');
         assert.match((await tool('run_tsc', { workingDirectory: project, tscPath: 'relative.js' })).message, /absolute/);
+    });
+    await check('run_dotnet_test parses TRX, groups same-cause failures and suggests a filter', async () => {
+        const project = path.join(fixture, 'dotnet-test');
+        await mkdir(project);
+        const source = path.join(project, 'CalcTests.cs');
+        await writeFile(source, 'line1\nAssert.Equal(1, 2);\nline3\n');
+        // dotnet test runs the VSTest target, so this project stands in for a real test project.
+        await writeFile(path.join(project, 'fake.proj'), `<Project><Target Name="Restore" /><Target Name="VSTest"><Copy SourceFiles="$(MSBuildProjectDirectory)/sample.trx" DestinationFiles="$(VSTestResultsDirectory)/out.trx" /><Error Text="Test Run Failed." Condition="Exists('$(MSBuildProjectDirectory)/fail')" /></Target></Project>`);
+        const failedResult = (name, line) => `<UnitTestResult testName="${name}" outcome="Failed" duration="00:00:00.0100000"><Output><ErrorInfo><Message>Assert.Equal() Failure</Message><StackTrace>   at Xunit.Assert.Equal()\n   at Demo.CalcTests.Adds() in ${source}:line ${line}</StackTrace></ErrorInfo></Output></UnitTestResult>`;
+        const trx = results => `<?xml version="1.0" encoding="utf-8"?><TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>${results}</Results></TestRun>`;
+        const passedResult = '<UnitTestResult testName="Demo.CalcTests.Ok" outcome="Passed" duration="00:00:00.0050000" />';
+        await writeFile(path.join(project, 'sample.trx'), trx(failedResult('Demo.CalcTests.Adds(x: 1)', 2) + failedResult('Demo.CalcTests.Adds(x: 2)', 2) + failedResult('Demo.CalcTests.Other', 3) + passedResult + '<UnitTestResult testName="Demo.CalcTests.Skip" outcome="NotExecuted" />'));
+        await writeFile(path.join(project, 'fail'), '');
+        const failed = await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['fake.proj'], contextLines: 1 });
+        assert.equal(failed.status, 'error', JSON.stringify(failed));
+        assert.deepEqual([failed.stats.passed, failed.stats.failed, failed.stats.skipped, failed.stats.total], [1, 3, 1, 5]);
+        assert.equal(failed.failures.length, 2);
+        assert.deepEqual([failed.failures[0].file, failed.failures[0].line, failed.failures[0].count], ['CalcTests.cs', 2, 2]);
+        assert.equal(failed.failures[1].count, undefined);
+        assert.equal(failed.failures[0].errors[0].message, 'Assert.Equal() Failure');
+        assert.equal(failed.failures[0].codeContext, ' 1| line1\n>2| Assert.Equal(1, 2);\n 3| line3');
+        assert.deepEqual(failed.rerunArgs, ['--filter', 'FullyQualifiedName~Demo.CalcTests.Adds|FullyQualifiedName~Demo.CalcTests.Other']);
+        await rm(failed.fullLogPath);
+
+        await rm(path.join(project, 'fail'));
+        await writeFile(path.join(project, 'sample.trx'), trx(passedResult));
+        const success = await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['fake.proj'] });
+        assert.equal(success.status, 'success', JSON.stringify(success));
+        assert.equal(success.rerunArgs, undefined);
+        await rm(success.fullLogPath);
+
+        await writeFile(path.join(project, 'sample.trx'), '<NotTrx />');
+        const malformed = await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['fake.proj'] });
+        assert.equal(malformed.status, 'report_unavailable', JSON.stringify(malformed));
+        await rm(malformed.fullLogPath);
+        assert.match((await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['--logger', 'html'] })).message, /managed by this tool/);
+    });
+    await check('same-cause failures are grouped and rerunArgs lists the failing files', async () => {
+        const project = path.join(fixture, 'group');
+        const cliDirectory = path.join(project, 'node_modules', 'vitest');
+        await mkdir(cliDirectory, { recursive: true });
+        const [a, b] = ['a.spec.ts', 'b.spec.ts'].map(name => path.join(project, name).replaceAll('\\', '/'));
+        const failure = (title, file, line, message) => ({ fullName: title, status: 'failed', failureMessages: [`Error: ${message}\n    at ${file}:${line}:1`] });
+        const payload = { success: false, testResults: [
+            { name: a, status: 'failed', message: '', assertionResults: [failure('one', a, 3, 'same'), failure('two', a, 3, 'same'), failure('three', a, 9, 'other'), { fullName: 'ok', status: 'passed', failureMessages: [] }] },
+            { name: b, status: 'failed', message: '', assertionResults: [failure('four', b, 1, 'b')] }
+        ] };
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
+        const grouped = await tool('run_vitest', { workingDirectory: project });
+        assert.equal(grouped.stats.failed, 4, JSON.stringify(grouped));
+        assert.deepEqual(grouped.failures.map(item => [item.title, item.count]), [['one', 2], ['three', undefined], ['four', undefined]]);
+        assert.deepEqual(grouped.rerunArgs, ['a.spec.ts', 'b.spec.ts']);
+        await rm(grouped.fullLogPath);
+    });
+    await check('run_tsc onlyNew lists diagnostics added since the previous run', async () => {
+        const project = path.join(fixture, 'tsc-diff');
+        const libDirectory = path.join(project, 'node_modules', 'typescript', 'lib');
+        await mkdir(libDirectory, { recursive: true });
+        const mock = path.join(libDirectory, 'tsc.js');
+        const emit = lines => writeFile(mock, `console.log(${JSON.stringify(lines.join('\n'))}); process.exitCode = 2;`);
+        await emit(['a.ts(1,1): error TS2304: Cannot find name A.', 'b.ts(5,1): error TS2322: Type B.']);
+        const first = await tool('run_tsc', { workingDirectory: project, onlyNew: true });
+        assert.deepEqual([first.errorCount, first.diagnostics.length, first.newCount, first.fixedCount], [2, 2, undefined, undefined], JSON.stringify(first));
+        await emit(['b.ts(9,1): error TS2322: Type B.', 'c.ts(2,1): error TS7006: Implicit any C.']);
+        const second = await tool('run_tsc', { workingDirectory: project, onlyNew: true });
+        assert.deepEqual([second.errorCount, second.newCount, second.fixedCount], [2, 1, 1], JSON.stringify(second));
+        assert.deepEqual(second.diagnostics.map(item => item.code), ['TS7006']);
+        const all = await tool('run_tsc', { workingDirectory: project });
+        assert.deepEqual([all.diagnostics.length, all.newCount], [2, undefined]);
+        for (const item of [first, second, all]) await rm(item.fullLogPath);
+    });
+    await check('run_eslint parses the JSON report and rejects managed arguments', async () => {
+        const project = path.join(fixture, 'eslint');
+        const binDirectory = path.join(project, 'node_modules', 'eslint', 'bin');
+        await mkdir(binDirectory, { recursive: true });
+        await mkdir(path.join(project, 'src'));
+        await writeFile(path.join(project, 'src', 'a.js'), 'const x = 1;\ny();\n???\n');
+        const mock = path.join(binDirectory, 'eslint.js');
+        const script = (payload, exitCode) => `const fs=require('node:fs'); const a=process.argv; if (a[2] !== '.' || a[a.indexOf('--format') + 1] !== 'json') process.exit(9); fs.writeFileSync(a[a.indexOf('--output-file') + 1], JSON.stringify(${JSON.stringify(payload)})); process.exitCode=${exitCode};`;
+        await writeFile(mock, script([{ filePath: path.join(project, 'src', 'a.js'), messages: [
+            { ruleId: 'no-unused-vars', severity: 1, message: 'x is unused', line: 1, column: 7 },
+            { ruleId: 'no-undef', severity: 2, message: 'y is not defined', line: 2, column: 1 },
+            { ruleId: null, fatal: true, severity: 2, message: 'Parsing error', line: 3, column: 1 }
+        ] }], 1));
+        const failed = await tool('run_eslint', { workingDirectory: project, contextLines: 1 });
+        assert.equal(failed.status, 'error', JSON.stringify(failed));
+        assert.deepEqual([failed.errorCount, failed.warningCount], [2, 1]);
+        assert.deepEqual(failed.ruleCounts, { 'no-undef': 1, 'no-unused-vars': 1 });
+        assert.deepEqual(failed.diagnostics.map(item => [item.rule, item.severity, item.line]), [['no-undef', 'error', 2], [undefined, 'error', 3], ['no-unused-vars', 'warning', 1]]);
+        assert.match(failed.diagnostics[0].file, /^src[\\/]a\.js$/);
+        assert.equal(failed.diagnostics[0].codeContext, ' 1| const x = 1;\n>2| y();\n 3| ???');
+        await rm(failed.fullLogPath);
+
+        await writeFile(mock, script([], 0));
+        const success = await tool('run_eslint', { workingDirectory: project });
+        assert.equal(success.status, 'success', JSON.stringify(success));
+        await rm(success.fullLogPath);
+
+        await writeFile(mock, "console.error('config crash'); process.exitCode = 2;");
+        const crash = await tool('run_eslint', { workingDirectory: project });
+        assert.equal(crash.status, 'error', JSON.stringify(crash));
+        await rm(crash.fullLogPath);
+        for (const argument of ['--format', '-f', '--output-file', '-o'])
+            assert.match((await tool('run_eslint', { workingDirectory: project, eslintArgs: [argument] })).message, /managed by this tool/);
+        assert.equal((await tool('run_eslint', { workingDirectory: fixture })).status, 'error');
+    });
+    await check('search_files returns bounded per-file matches', async () => {
+        const project = path.join(fixture, 'search');
+        await mkdir(path.join(project, 'sub'), { recursive: true });
+        await mkdir(path.join(project, 'node_modules', 'x'), { recursive: true });
+        await writeFile(path.join(project, 'a.cs'), 'class Foo {}\n// TODO one\n// todo two\n');
+        await writeFile(path.join(project, 'sub', 'b.ts'), 'const todo = 1;\n');
+        await writeFile(path.join(project, 'node_modules', 'x', 'c.cs'), '// TODO hidden\n');
+        await writeFile(path.join(project, 'bin.dat'), Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.from('TODO binary')]));
+        await writeFile(path.join(project, 'sjis.txt'), Buffer.concat([Buffer.from('TODO '), Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]), Buffer.from('\n')]));
+        const all = await tool('search_files', { path: project, pattern: 'todo' });
+        assert.deepEqual([all.status, all.filesMatched, all.totalMatches, all.truncated], ['success', 3, 4, undefined], JSON.stringify(all));
+        assert.deepEqual(all.files, [
+            { file: 'a.cs', count: 2, matches: ['2| // TODO one', '3| // todo two'] },
+            { file: 'sjis.txt', count: 1, matches: ['1| TODO 日本語'] },
+            { file: 'sub/b.ts', count: 1, matches: ['1| const todo = 1;'] }
+        ]);
+        assert.deepEqual((await tool('search_files', { path: project, pattern: 'todo', fileName: '*.cs' })).files.map(item => item.file), ['a.cs']);
+        assert.equal((await tool('search_files', { path: project, pattern: 'TODO', caseSensitive: true })).totalMatches, 2);
+        const limited = await tool('search_files', { path: project, pattern: 'todo', maxResults: 1 });
+        assert.deepEqual([limited.truncated, limited.files[0].matches.length, limited.files[1].matches], [true, 1, undefined]);
+        assert.equal((await tool('search_files', { path: path.join(project, 'a.cs'), pattern: 'Foo' })).files[0].file, 'a.cs');
+        assert.equal((await tool('search_files', { path: project, pattern: 'nothing-here' })).totalMatches, 0);
+        assert.match((await tool('search_files', { path: project, pattern: '(' })).message, /Invalid regex/);
+        assert.equal((await tool('search_files', { path: 'relative', pattern: 'x' })).status, 'error');
+
+        const wide = path.join(project, 'wide');
+        await mkdir(wide);
+        for (let index = 0; index < 60; index++)
+            await writeFile(path.join(wide, `file${String(index).padStart(2, '0')}.txt`), Array.from({ length: 10 }, () => `needle ${'w'.repeat(300)}`).join('\n'));
+        const bounded = await tool('search_files', { path: wide, pattern: 'needle', maxResults: 100 });
+        assert.deepEqual([bounded.filesMatched, bounded.totalMatches, bounded.files.length, bounded.truncated], [60, 600, 40, true]);
+        assert.ok(JSON.stringify(bounded).length <= 8000, String(JSON.stringify(bounded).length));
+    });
+    await check('tool calls are recorded in the usage log', async () => {
+        const entries = (await readFile(path.join(tmpdir(), 'inazuma-pwsh-logs', 'usage.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+        for (const name of ['search_files', 'run_eslint', 'run_dotnet_test', 'peek_file'])
+            assert.ok(entries.some(entry => entry.tool === name && entry.sourceBytes > 0 && entry.responseChars > 0 && entry.time), `${name} is not recorded`);
     });
     await check('pytest JUnit XML parsing with a fake interpreter', async () => {
         const project = path.join(fixture, 'pytest');
