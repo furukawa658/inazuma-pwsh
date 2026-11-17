@@ -1,10 +1,10 @@
-<p align="center"><img src="media/icon.png" alt="Zuma MCP icon" width="128"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/v0.5.1/vscode-extension/media/icon.png" alt="Zuma MCP icon" width="128"></p>
 
 # Zuma MCP
 
 **Your coding agent reads 7% of a design document and 1% of a build log, not 100%.**
 
-![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](media/before-after.gif)
+![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/v0.5.1/vscode-extension/media/before-after.gif)
 
 | Input | Full read | With Zuma MCP | Characters returned |
 | --- | --- | --- | --- |
