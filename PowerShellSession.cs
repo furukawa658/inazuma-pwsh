@@ -118,6 +118,11 @@ public sealed class PowerShellSession : IDisposable
         var pwshPath = ResolvePwshPath();
         var workerPath = ResolveWorkerPath();
         var pipeName = $"inazuma-pwsh-{Guid.NewGuid():N}";
+        if (!OperatingSystem.IsWindows() &&
+            Encoding.UTF8.GetByteCount(Path.Combine(Path.GetTempPath(), $"CoreFxPipe_{pipeName}")) > (OperatingSystem.IsMacOS() ? 103 : 107))
+        {
+            pipeName = Path.Combine("/tmp", pipeName);
+        }
 
         var pipeServer = new NamedPipeServerStream(
             pipeName,
