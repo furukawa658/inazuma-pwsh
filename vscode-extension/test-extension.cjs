@@ -50,7 +50,7 @@ async function main() {
     sandbox.module.exports.activate(context);
     assert.equal(context.subscriptions[0], disposable);
     const [definition] = provider.provideMcpServerDefinitions();
-    assert.equal(definition.label, 'InazumaPwsh');
+    assert.equal(definition.label, 'Zuma');
     assert.equal(definition.version, manifest.version);
     assert.equal(definition.args.join(' '), `--parent-pid ${process.pid}`);
     assert.equal(definition.env, undefined);
@@ -59,14 +59,14 @@ async function main() {
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.6.0');
+    assert.equal(manifest.version, '0.6.1');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.6.0-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.6.1-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping

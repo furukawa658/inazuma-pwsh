@@ -78,6 +78,7 @@ async function tool(name, args) {
 const startedAt = performance.now();
 let passed = 0;
 async function check(name, run) {
+    if (process.env.INAZUMA_OUTLINE_ONLY && !name.startsWith('outline regression')) return;
     await run();
     passed++;
     console.log(`PASS ${name}`);
@@ -123,6 +124,36 @@ try {
         const response = JSON.parse(raw);
         assert.deepEqual(response.data, ['out', 'err-line'], raw);
         assert.ok(raw.length < 1000, `response too large: ${raw.length}`);
+    });
+    await check('outline regression handles long markdown fences', async () => {
+        const docPath = path.join(fixture, 'fences.md');
+        await writeFile(docPath, ['# First', '````markdown', '```', '# Hidden', '````', '## Second',
+            '~~~', '~~~not-a-close', '# Also hidden', '~~~', '## Third'].join('\n'));
+        const result = await tool('peek_file', { path: docPath });
+        assert.deepEqual(result.entries.map(entry => entry.title), ['First', 'Second', 'Third']);
+        assert.equal(result.entries[1].end, 10);
+    });
+    await check('outline regression parses PowerShell declarations and ranges', async () => {
+        const scriptPath = path.join(fixture, 'script.ps1');
+        await writeFile(scriptPath, [
+            'function Outer {', "@'", 'function Ghost {}', "'@", '<#', 'function Commented {}', '#>',
+            'function Inner {', "  '}'", '}', '}', "function After { 'ok' }"
+        ].join('\n'));
+        const result = await tool('peek_file', { path: scriptPath });
+        assert.deepEqual(result.entries.map(entry => [entry.title, entry.start, entry.end, entry.level]), [
+            ['function Outer {', 1, 11, 1], ['function Inner {', 8, 10, 2], ["function After { 'ok' }", 12, 12, 1]
+        ]);
+        const section = await tool('read_section', { path: scriptPath, query: 'Outer' });
+        assert.equal(section.endLine, 11);
+    });
+    await check('outline regression does not execute PowerShell source', async () => {
+        const scriptPath = path.join(fixture, 'module.psm1');
+        const markerPath = path.join(fixture, 'must-not-exist');
+        await writeFile(scriptPath, [`Set-Content -Path ${literal(markerPath)} -Value 'executed'`,
+            'class Widget {', '    [void] Run() {', '    }', '}'].join('\n'));
+        const result = await tool('peek_file', { path: scriptPath });
+        assert.deepEqual(result.entries.map(entry => [entry.start, entry.end, entry.level]), [[2, 5, 1], [3, 4, 2]]);
+        await assert.rejects(stat(markerPath), { code: 'ENOENT' });
     });
     await check('peek_file outlines markdown and recommends partial reads', async () => {
         const sections = [];
