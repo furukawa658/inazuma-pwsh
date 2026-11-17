@@ -47,7 +47,7 @@ public sealed class PowerShellSession : IDisposable
             {
                 return Path.GetFullPath(overridePath);
             }
-            throw new FileNotFoundException($"The specified INAZUMA_PWSH_PATH does not exist: {overridePath}");
+            throw new FileNotFoundException($"The specified INAZUMA_PWSH_PATH does not exist: {overridePath}. Fix or clear inazumaPwsh.pwshPath (INAZUMA_PWSH_PATH).");
         }
 
         var executableName = OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh";
@@ -55,7 +55,17 @@ public sealed class PowerShellSession : IDisposable
         var dirs = string.IsNullOrEmpty(pathEnv)
             ? new List<string>()
             : pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
+        {
+            // VS Code started before installing pwsh or with a stale environment may lack these PATH entries.
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(programFiles)) dirs.Add(Path.Combine(programFiles, "PowerShell", "7"));
+            if (!string.IsNullOrEmpty(localAppData)) dirs.Add(Path.Combine(localAppData, "Microsoft", "WindowsApps"));
+            if (!string.IsNullOrEmpty(profile)) dirs.Add(Path.Combine(profile, ".dotnet", "tools"));
+        }
+        else
         {
             var home = Environment.GetEnvironmentVariable("HOME");
             dirs.AddRange(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"]);
@@ -67,7 +77,7 @@ public sealed class PowerShellSession : IDisposable
             if (File.Exists(candidate)) return Path.GetFullPath(candidate);
         }
 
-        throw new FileNotFoundException($"Could not locate {executableName} in PATH. PowerShell 7 or higher is required.");
+        throw new FileNotFoundException($"Could not locate {executableName} in PATH or the standard install locations. PowerShell 7 or higher is required. Install it, restart VS Code, or set inazumaPwsh.pwshPath (INAZUMA_PWSH_PATH) to the absolute path of {executableName}.");
     }
 
     private static string ResolveWorkerPath()

@@ -45,7 +45,13 @@ var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 var parentWatcher = parent == null ? Task.CompletedTask : WatchParentAsync(parent, lifetime);
 
 // pwsh/ワーカーの解決だけを起動時に検証し、ワーカーは最初の呼出しで起動する
-PowerShellSession.ValidateEnvironment();
+try { PowerShellSession.ValidateEnvironment(); }
+catch (FileNotFoundException error)
+{
+    Console.Error.WriteLine($"InazumaPwsh cannot start: {error.Message}");
+    Environment.ExitCode = 1;
+    return;
+}
 LogCleaner.StartBackgroundCleanup();
 
 try { await host.RunAsync(); }
