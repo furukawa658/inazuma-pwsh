@@ -2,14 +2,15 @@
   "name": "inazuma-pwsh",
   "displayName": "Zuma MCP",
   "description": "Persistent PowerShell sessions and structured .NET, Playwright, bun test, pytest, and Vitest diagnostics for AI coding in VS Code on Windows, Linux, and macOS.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "ShunsukeF",
   "icon": "media/icon.png",
   "license": "MIT",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/furukawa658/inazuma-pwsh.git"
+    "url": "https://github.com/furukawa658/inazuma-pwsh.git",
+    "directory": "vscode-extension"
   },
   "bugs": {
     "url": "https://github.com/furukawa658/inazuma-pwsh/issues"
