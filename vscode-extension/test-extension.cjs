@@ -49,14 +49,14 @@ async function main() {
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.5.2');
+    assert.equal(manifest.version, '0.5.3');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.5.2-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.5.3-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping
