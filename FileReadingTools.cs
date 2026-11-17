@@ -33,7 +33,10 @@ public sealed class FileReadingTools
         [Description("Absolute path to the text file.")] string path,
         [Description("Maximum line count for recommending full read (1 to 5000, default 200).")] int fullThreshold = 200,
         [Description("Maximum number of outline entries to return (10 to 1000, default 200).")] int maxEntries = 200,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        UsageLog.TrackFileAsync("peek_file", path, PeekFile(path, fullThreshold, maxEntries));
+
+    private static Task<string> PeekFile(string path, int fullThreshold, int maxEntries)
     {
         var validationError = ValidateFile(path);
         if (validationError != null) return Task.FromResult(validationError);
@@ -80,7 +83,10 @@ public sealed class FileReadingTools
         [Description("1-based line number to start reading from.")] int? startLine = null,
         [Description("1-based line number to end reading at (inclusive). Defaults to startLine + 199.")] int? endLine = null,
         [Description("Maximum characters of formatted text to return (clamped 1000..50000, default 12000).")] int maxChars = 12000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        UsageLog.TrackFileAsync("read_section", path, ReadSection(path, query, startLine, endLine, maxChars));
+
+    private static Task<string> ReadSection(string path, string? query, int? startLine, int? endLine, int maxChars)
     {
         var validationError = ValidateFile(path);
         if (validationError != null) return Task.FromResult(validationError);
@@ -270,7 +276,10 @@ public sealed class FileReadingTools
         [Description("Number of tail lines from the end of the file (clamped 0..200, default 20).")] int tailLines = 20,
         [Description("Maximum number of groups to return (clamped 1..200, default 30).")] int maxGroups = 30,
         [Description("Maximum characters of serialized output JSON (clamped 2000..50000, default 8000).")] int maxChars = 8000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        UsageLog.TrackFileAsync("summarize_log", path, SummarizeLog(path, pattern, contextLines, tailLines, maxGroups, maxChars));
+
+    private static Task<string> SummarizeLog(string path, string pattern, int contextLines, int tailLines, int maxGroups, int maxChars)
     {
         var validationError = ValidateFile(path);
         if (validationError != null) return Task.FromResult(validationError);
@@ -424,6 +433,147 @@ public sealed class FileReadingTools
         {
             return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = ex.Message }));
         }
+    }
+
+    private static readonly string[] SkippedDirectories = [".git", "node_modules", ".venv"];
+
+    private sealed record FileMatches(string File, List<string> Matches) { public int Count { get; set; } }
+
+    [McpServerTool(Name = "search_files")]
+    [Description("Search text files under a directory (or one file) with a regex and return per-file match counts and the first matching lines in a bounded response. Skips .git, node_modules, .venv, binary files and files over 5 MB. Ignore files such as .gitignore are not applied.")]
+    public Task<string> SearchFilesAsync(
+        [Description("Absolute path to a directory or file.")] string path,
+        [Description("Regex pattern, case-insensitive unless caseSensitive is true.")] string pattern,
+        [Description("Optional file-name wildcard such as *.cs or *.test.ts.")] string? fileName = null,
+        [Description("Maximum matching lines returned across all files (clamped 1..100, default 30).")] int maxResults = 30,
+        bool caseSensitive = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) || (!Directory.Exists(path) && !File.Exists(path)))
+            return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = "Path must be an existing absolute directory or file path." }));
+        Regex regex;
+        try
+        {
+            regex = new Regex(pattern, (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        }
+        catch (ArgumentException ex)
+        {
+            return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = $"Invalid regex pattern: {ex.Message}" }));
+        }
+        return Task.Run(() => SearchFiles(path, regex, fileName, Math.Clamp(maxResults, 1, 100), cancellationToken), cancellationToken);
+    }
+
+    private static string SearchFiles(string path, Regex regex, string? fileName, int maxResults, CancellationToken cancellationToken)
+    {
+        const int MaxFiles = 50000, MaxListedFiles = 40, MaxLinesPerFile = 5, MaxLineChars = 200;
+        var root = Directory.Exists(path) ? path : Path.GetDirectoryName(path)!;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var found = new List<FileMatches>();
+        int filesScanned = 0, filesMatched = 0, totalMatches = 0, shown = 0;
+        var stoppedEarly = false;
+        try
+        {
+            foreach (var file in EnumerateSearchFiles(path, fileName))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (filesScanned >= MaxFiles || watch.Elapsed > TimeSpan.FromSeconds(20)) { stoppedEarly = true; break; }
+                string[] lines;
+                try
+                {
+                    var info = new FileInfo(file);
+                    if (info.Length > 5 * 1024 * 1024 || IsBinary(file)) continue;
+                    lines = FileOutline.ReadAndDecodeFile(file).Lines;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                filesScanned++;
+
+                FileMatches? current = null;
+                var listed = false;
+                for (var index = 0; index < lines.Length; index++)
+                {
+                    if (!regex.IsMatch(lines[index])) continue;
+                    totalMatches++;
+                    if (current == null)
+                    {
+                        filesMatched++;
+                        current = new FileMatches(Path.GetRelativePath(root, file).Replace('\\', '/'), []);
+                        listed = found.Count < MaxListedFiles;
+                        if (listed) found.Add(current);
+                    }
+                    current.Count++;
+                    if (!listed || shown >= maxResults || current.Matches.Count >= MaxLinesPerFile) continue;
+                    var text = lines[index].Trim();
+                    current.Matches.Add($"{index + 1}| {(text.Length > MaxLineChars ? text[..MaxLineChars] + "..." : text)}");
+                    shown++;
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return JsonDefaults.Serialize(new { status = "error", message = "Regex matching timed out." });
+        }
+        catch (OperationCanceledException)
+        {
+            return JsonDefaults.Serialize(new { status = "cancelled" });
+        }
+
+        string Serialize() => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            status = "success",
+            filesScanned,
+            filesMatched,
+            totalMatches,
+            files = found.Select(item => new { file = item.File, count = item.Count, matches = item.Matches.Count == 0 ? null : item.Matches }),
+            truncated = shown < totalMatches || filesMatched > found.Count ? true : (bool?)null,
+            stoppedEarly = stoppedEarly ? true : (bool?)null
+        }, JsonDefaults.OptionsIgnoreNull);
+
+        var json = Serialize();
+        for (var index = found.Count - 1; index >= 0 && json.Length > 8000; index--)
+        {
+            shown -= found[index].Matches.Count;
+            found[index].Matches.Clear();
+            json = Serialize();
+        }
+        return json;
+    }
+
+    private static IEnumerable<string> EnumerateSearchFiles(string path, string? fileName)
+    {
+        if (File.Exists(path)) { yield return path; yield break; }
+        var pending = new Stack<string>();
+        pending.Push(path);
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            string[] files, directories;
+            try
+            {
+                files = Directory.GetFiles(directory);
+                directories = Directory.GetDirectories(directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            Array.Sort(files, StringComparer.Ordinal);
+            foreach (var file in files)
+                if (string.IsNullOrEmpty(fileName) || System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(fileName, Path.GetFileName(file)))
+                    yield return file;
+            Array.Sort(directories, StringComparer.Ordinal);
+            foreach (var child in directories.Reverse())
+            {
+                var info = new DirectoryInfo(child);
+                if (SkippedDirectories.Contains(info.Name, StringComparer.OrdinalIgnoreCase) || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                pending.Push(child);
+            }
+        }
+    }
+
+    private static bool IsBinary(string path)
+    {
+        var buffer = new byte[4096];
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var count = stream.Read(buffer, 0, buffer.Length);
+        var utf16 = count >= 2 && ((buffer[0] == 0xFF && buffer[1] == 0xFE) || (buffer[0] == 0xFE && buffer[1] == 0xFF));
+        return !utf16 && Array.IndexOf(buffer, (byte)0, 0, count) >= 0;
     }
 
     private static string? ValidateFile(string path)

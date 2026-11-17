@@ -32,7 +32,17 @@ async function main() {
         McpStdioServerDefinition: class {
             constructor(label, command, args, env, version) { Object.assign(this, { label, command, args, env, version }); }
         },
-        Uri: { file: value => value }
+        Uri: { file: value => value },
+        StatusBarAlignment: { Right: 2 },
+        window: {
+            createStatusBarItem(id) { assert.equal(id, 'inazumaPwsh.savings'); return { show() {}, hide() {}, dispose() {} }; },
+            showQuickPick() {},
+            showInformationMessage() {}
+        },
+        commands: { registerCommand(id) {
+            assert.equal(id, manifest.contributes.commands[0].command);
+            return disposable;
+        } }
     };
     const context = { extensionPath: __dirname, subscriptions: [] };
     const sandbox = { module: { exports: {} }, process, require: name => name === 'vscode' ? api : require(name) };
@@ -49,14 +59,14 @@ async function main() {
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.5.4');
+    assert.equal(manifest.version, '0.6.0');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.5.4-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.6.0-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping
@@ -86,6 +96,19 @@ async function main() {
     assert.equal(provider.provideMcpServerDefinitions()[0].env, undefined);
     configurationChanged({ affectsConfiguration: key => key === 'inazumaPwsh.pwshPath' });
     assert.equal(changeCount, 3);
+
+    // Savings summary
+    const usage = sandbox.module.exports.summarizeUsage([
+        '{"time":"2026-11-17T00:00:00Z","tool":"peek_file","sourceBytes":1000,"responseBytes":100}',
+        '{"time":"2026-11-17T00:01:00Z","tool":"summarize_log","sourceBytes":9000,"responseBytes":100}',
+        '{"time":"2026-11-17T00:02:00Z","tool":"peek_file","sourceBytes":1000,"responseBytes":300}',
+        '{"tool":"old","sourceBytes":5,"responseChars":1}',
+        'not json', ''
+    ].join('\n'));
+    assert.equal(usage.since, '2026-11-17T00:00:00Z');
+    assert.equal(JSON.stringify(usage.total), JSON.stringify({ calls: 3, sourceBytes: 11000, responseBytes: 500 }));
+    assert.equal(usage.rows.map(row => `${row.tool}:${row.calls}`).join(','), 'summarize_log:1,peek_file:2');
+    for (const subscription of context.subscriptions) subscription.dispose();
     console.log('EXTENSION_PROVIDER_TEST_PASSED');
 }
 
