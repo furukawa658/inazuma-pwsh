@@ -1,6 +1,6 @@
 // Usage: node vscode-extension/build-target.mjs <win32-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64>
 import { spawnSync } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +12,7 @@ if (!rid) { console.error(`Unknown target "${target}". Use one of: ${Object.keys
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.dirname(extensionDir);
 const version = JSON.parse(readFileSync(path.join(extensionDir, 'package.json'), 'utf8')).version;
+mkdirSync(path.join(root, 'artifacts'), { recursive: true });
 const serverDir = path.join(extensionDir, 'server');
 const shell = process.platform === 'win32';
 
