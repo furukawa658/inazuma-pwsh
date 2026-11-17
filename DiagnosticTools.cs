@@ -115,14 +115,15 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         }, cancellationToken);
 
     [McpServerTool(Name = "run_tsc")]
-    [Description("Run a locally installed TypeScript compiler with --noEmit and return error counts, error-code counts and the first 15 diagnostics. tscPath overrides the compiler found in node_modules/typescript. Dependencies are not installed automatically.")]
+    [Description("Run a locally installed TypeScript compiler with --noEmit and return error counts, error-code counts and the first 15 diagnostics. Passing --build or -b in tscArgs builds project references and omits --noEmit. tscPath overrides the compiler found in node_modules/typescript. Dependencies are not installed automatically.")]
     public Task<string> RunTscAsync(string workingDirectory,
         [Description("Arguments passed to tsc, with each argument as a separate array element, for example -p tsconfig.app.json.") ] string[]? tscArgs = null,
         [Description("Optional absolute path to tsc.js.") ] string? tscPath = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
         RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
         {
-            RejectManagedArguments(tscArgs, "--pretty", "--noEmit", "--watch", "-w", "--build", "-b", "--init");
+            RejectManagedArguments(tscArgs, "--pretty", "--noEmit", "--watch", "-w", "--preserveWatchOutput", "--init");
+            var build = tscArgs?.Any(argument => argument is "--build" or "-b") == true;
             string? cli = tscPath;
             if (!string.IsNullOrEmpty(cli))
             {
@@ -131,8 +132,10 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             }
             else cli = FindPackageFile(workingDirectory, ["typescript"], Path.Combine("lib", "tsc.js"));
             if (cli == null) throw new FileNotFoundException("Local TypeScript compiler was not found. Install project dependencies first.");
-            var arguments = new List<string> { cli, "--noEmit", "--pretty", "false" };
+            var arguments = new List<string> { cli };
             arguments.AddRange(tscArgs ?? []);
+            if (!build) arguments.Add("--noEmit");
+            arguments.AddRange(["--pretty", "false"]);
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["NO_COLOR"] = "1" }, token);
             var report = TscReportParser.Parse(execution.FullLogPath, workingDirectory, execution.ExitCode);

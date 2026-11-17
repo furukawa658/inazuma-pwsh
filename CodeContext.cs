@@ -47,6 +47,8 @@ internal static class CodeContext
         var line = item["line"]?.GetValue<int>() ?? 0;
         if (string.IsNullOrEmpty(file) || line <= 0) return null;
         var path = Path.GetFullPath(file, workingDirectory);
+        var relative = Path.GetRelativePath(workingDirectory, path);
+        if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)) return null;
         var segments = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (segments.Any(segment => ExcludedSegments.Contains(segment, StringComparer.OrdinalIgnoreCase))) return null;
         var info = new FileInfo(path);
