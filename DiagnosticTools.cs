@@ -301,9 +301,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         int contextLines, Func<JsonObject, string[]?>? rerun = null)
     {
         var json = await CombineAsync(report, execution, workingDirectory, contextLines, rerun);
-        long sourceBytes = report.Length;
-        try { sourceBytes += new FileInfo(execution.FullLogPath).Length; } catch (IOException) { }
-        UsageLog.Record(tool, sourceBytes, json.Length);
+        long sourceBytes = 0;
+        try { sourceBytes = new FileInfo(execution.FullLogPath).Length; } catch (IOException) { }
+        UsageLog.Record(tool, sourceBytes, json);
         return json;
     }
 

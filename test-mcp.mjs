@@ -833,8 +833,9 @@ process.exitCode = 1;
     });
     await check('tool calls are recorded in the usage log', async () => {
         const entries = (await readFile(path.join(tmpdir(), 'inazuma-pwsh-logs', 'usage.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-        for (const name of ['search_files', 'run_eslint', 'run_dotnet_test', 'peek_file'])
-            assert.ok(entries.some(entry => entry.tool === name && entry.sourceBytes > 0 && entry.responseChars > 0 && entry.time), `${name} is not recorded`);
+        for (const name of ['run_eslint', 'run_dotnet_test', 'peek_file', 'summarize_log'])
+            assert.ok(entries.some(entry => entry.tool === name && entry.sourceBytes > 0 && entry.responseBytes > 0 && entry.time), `${name} is not recorded`);
+        assert.ok(!entries.some(entry => entry.tool === 'search_files' && entry.responseBytes));
     });
     await check('pytest JUnit XML parsing with a fake interpreter', async () => {
         const project = path.join(fixture, 'pytest');

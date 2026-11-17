@@ -6,7 +6,7 @@ internal static class UsageLog
     private const long MaxBytes = 5L * 1024 * 1024;
     private static readonly object Gate = new();
 
-    public static void Record(string tool, long sourceBytes, int responseChars)
+    public static void Record(string tool, long sourceBytes, string response)
     {
         if (sourceBytes <= 0) return;
         try
@@ -17,7 +17,8 @@ internal static class UsageLog
                 Directory.CreateDirectory(directory);
                 var file = new FileInfo(Path.Combine(directory, "usage.jsonl"));
                 if (file.Exists && file.Length > MaxBytes) file.Delete();
-                File.AppendAllText(file.FullName, JsonDefaults.Serialize(new { time = DateTime.UtcNow.ToString("o"), tool, sourceBytes, responseChars }) + "\n");
+                var entry = new { time = DateTime.UtcNow.ToString("o"), tool, sourceBytes, responseBytes = System.Text.Encoding.UTF8.GetByteCount(response) };
+                File.AppendAllText(file.FullName, JsonDefaults.Serialize(entry) + "\n");
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
@@ -26,7 +27,7 @@ internal static class UsageLog
     public static async Task<string> TrackFileAsync(string tool, string path, Task<string> response)
     {
         var json = await response;
-        try { Record(tool, new FileInfo(path).Length, json.Length); }
+        try { Record(tool, new FileInfo(path).Length, json); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
         return json;
     }

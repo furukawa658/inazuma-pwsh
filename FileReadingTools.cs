@@ -470,7 +470,6 @@ public sealed class FileReadingTools
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var found = new List<FileMatches>();
         int filesScanned = 0, filesMatched = 0, totalMatches = 0, shown = 0;
-        long sourceBytes = 0;
         var stoppedEarly = false;
         try
         {
@@ -484,7 +483,6 @@ public sealed class FileReadingTools
                     var info = new FileInfo(file);
                     if (info.Length > 5 * 1024 * 1024 || IsBinary(file)) continue;
                     lines = FileOutline.ReadAndDecodeFile(file).Lines;
-                    sourceBytes += info.Length;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
                 filesScanned++;
@@ -537,7 +535,6 @@ public sealed class FileReadingTools
             found[index].Matches.Clear();
             json = Serialize();
         }
-        UsageLog.Record("search_files", sourceBytes, json.Length);
         return json;
     }
 
