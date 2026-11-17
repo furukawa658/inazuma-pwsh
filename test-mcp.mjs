@@ -608,6 +608,37 @@ process.exitCode = 1;
         assert.ok(JSON.stringify(huge).length <= 8000);
         for (const lines of [0, -3]) assert.equal((await tool('run_vitest', { workingDirectory: project, contextLines: lines })).failures[0].codeContext, undefined);
         await rm(withContext.fullLogPath);
+
+        const run = async (files, contextLines) => {
+            const results = files.map(([file, line]) => ({ name: file, status: 'failed', message: '', assertionResults: [{ fullName: `fails ${path.basename(file)}`, status: 'failed', failureMessages: [`Error: boom\n    at ${file.replaceAll('\\', '/')}:${line}:1`] }] }));
+            await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); fs.writeFileSync(out, JSON.stringify(${JSON.stringify({ success: false, testResults: results })})); process.exitCode = 1;`);
+            return tool('run_vitest', { workingDirectory: project, contextLines });
+        };
+        const sjisPath = path.join(project, 'sjis.ts');
+        await writeFile(sjisPath, Buffer.concat([Buffer.from('const a = 1;\n// '), Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]), Buffer.from('\nconst b = 2;\n')]));
+        const utf16Path = path.join(project, 'utf16.ts');
+        await writeFile(utf16Path, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('const a = 1;\r\n// 日本語\r\nconst b = 2;\r\n', 'utf16le')]));
+        const dependencyPath = path.join(project, 'node_modules', 'pkg', 'index.ts');
+        await mkdir(path.dirname(dependencyPath), { recursive: true });
+        await writeFile(dependencyPath, 'line1\nline2\n');
+        const outsidePath = path.join(fixture, 'outside.ts');
+        await writeFile(outsidePath, 'line1\nline2\n');
+        const encoded = await run([[sjisPath, 2], [utf16Path, 2], [dependencyPath, 1], [outsidePath, 1], [path.join(project, 'missing.ts'), 1]], 1);
+        const contexts = encoded.failures.map(failure => failure.codeContext);
+        assert.equal(contexts[0], ' 1| const a = 1;\n>2| // 日本語\n 3| const b = 2;', JSON.stringify(encoded));
+        assert.equal(contexts[1], contexts[0]);
+        assert.deepEqual(contexts.slice(2), [undefined, undefined, undefined]);
+
+        const widePaths = [];
+        for (let index = 0; index < 10; index++) {
+            widePaths.push([path.join(project, `wide${index}.ts`), 11]);
+            await writeFile(widePaths[index][0], Array.from({ length: 21 }, () => 'z'.repeat(200)).join('\n'));
+        }
+        const wide = await run(widePaths, 10);
+        assert.ok(JSON.stringify(wide).length <= 8000, String(JSON.stringify(wide).length));
+        assert.ok(wide.failures[0].codeContext.length <= 2400);
+        assert.equal(wide.failures.at(-1).codeContext, undefined);
+        assert.ok(wide.failures.every(failure => failure.file && failure.line === 11), JSON.stringify(wide));
     });
     await check('run_tsc parses diagnostics, counts and rejects managed arguments', async () => {
         const project = path.join(fixture, 'tsc');
@@ -652,8 +683,12 @@ process.exitCode = 1;
         assert.equal(crash.errorCount, 0);
         await rm(crash.fullLogPath);
 
-        for (const argument of ['--pretty', '--watch', '-w', '--noEmit', '-b'])
+        for (const argument of ['--pretty', '--watch', '-w', '--noEmit', '--preserveWatchOutput'])
             assert.match((await tool('run_tsc', { workingDirectory: project, tscArgs: [argument] })).message, /managed by this tool/);
+        await writeFile(mock, "process.exitCode = process.argv.includes('--noEmit') || !process.argv.includes('--build') ? 9 : 0;");
+        const built = await tool('run_tsc', { workingDirectory: project, tscArgs: ['--build'] });
+        assert.equal(built.status, 'success', JSON.stringify(built));
+        await rm(built.fullLogPath);
         assert.equal((await tool('run_tsc', { workingDirectory: fixture })).status, 'error');
         assert.match((await tool('run_tsc', { workingDirectory: project, tscPath: 'relative.js' })).message, /absolute/);
     });
