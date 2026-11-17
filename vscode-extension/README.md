@@ -1,13 +1,27 @@
-<p align="center"><img src="https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/release/0.2.0/vscode-extension/media/icon.png" alt="InazumaPwsh icon" width="128"></p>
+<p align="center"><img src="media/icon.png" alt="Zuma MCP icon" width="128"></p>
 
-# InazumaPwsh
+# Zuma MCP
 
-**Keep your PowerShell setup between calls. Get the results your coding agent needs.**
+**Your coding agent reads 7% of a design document and 1% of a build log, not 100%.**
 
-InazumaPwsh connects your VS Code coding agent to persistent local PowerShell sessions on Windows x64. Reuse variables, loaded modules, and your working location across tool calls. Investigate .NET build errors and Playwright, bun test, pytest, and Vitest failures through structured diagnostics, and read large files and logs by outline, section, or summary, with full logs available when you need the details.
+![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](media/before-after.gif)
 
-It is built for Windows automation, .NET development, and projects that use Playwright, bun test, pytest, or Vitest.
+| Input | Full read | With Zuma MCP | Characters returned |
+| --- | --- | --- | --- |
+| 68,000-character Markdown design document | 68,000 | `peek_file` | **7%** (about 4,760) |
+| same document | 68,000 | `peek_file` + one `read_section` | **20%** (about 13,600) |
+| 137,000-character execution log | 137,000 | `summarize_log` | **1%** (about 1,370) |
 
+These are single-file measurements. Savings across complete chats have not been measured.
+
+Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent local PowerShell 7 sessions. Reuse variables, modules, and your working location across tool calls; investigate .NET build, TypeScript (`tsc`), Playwright, bun test, pytest, and Vitest failures through structured diagnostics; and read large files and logs by outline, section, or summary, with full logs available when you need the details.
+
+## What's new in 0.5.0
+
+- **`run_tsc`.** Runs the locally installed TypeScript compiler without emitting files and returns diagnostics with file, line, column, code, and message, using the same bounded responses as the other diagnostic tools.
+- **`contextLines` for the diagnostic tools.** Shows 0 to 10 source lines around each failure location as `codeContext` (default 0 = off). `summarize_log` also takes `contextLines` (0 to 5, default 1) and drops context first when the response is trimmed.
+- **Linux and macOS (experimental).** The server now builds for the host platform. The project is tested locally only on Windows (41 of 41 checks pass); a Linux/macOS/Windows CI matrix is added but has not run yet. Linux and macOS have no Job Object, so a crashed server can leave worker processes behind. The pwsh override is still `INAZUMA_PWSH_PATH` or the `inazumaPwsh.pwshPath` setting.
+- **Rename.** The display and package name are now Zuma MCP. Setting keys, environment variables, executable names, and the log folder keep their `inazuma` names for compatibility.
 ## What's new in 0.4.1
 
 0.4.1 shortens responses and reduces idle resource use.
@@ -47,7 +61,7 @@ Measured examples: on a 68,000-character Markdown design document, `peek_file` r
 
 `run_bun_test`, `run_pytest`, and `run_vitest` joined `run_dotnet_build` and `run_playwright`. They return test counts and failures with file, line, and message, using the status values `success`, `error`, `no_tests`, or `report_unavailable`. A run without a usable report is never reported as `success`. Responses are limited to 8,000 characters and list at most 10 failures; the full log is saved for follow-up searches.
 
-## Why use InazumaPwsh?
+## Why use Zuma MCP?
 
 - **Set up once, continue working.** Keep a runspace ready for the next command instead of repeating imports and recreating variables on every call.
 - **Give each chat its own working state.** Separate session IDs keep variables, modules, locations, and worker process environments independent. Different sessions can execute concurrently; files and other operating system resources remain shared.
@@ -59,28 +73,28 @@ Measured examples: on a 68,000-character Markdown design document, `peek_file` r
 
 After installing the extension and approving its MCP tools, ask your agent to use InazumaPwsh. For example:
 
-- "Use a dedicated InazumaPwsh session for this chat. Load my module, then reuse it for the next commands."
+- "Use a dedicated Zuma MCP session for this chat. Load my module, then reuse it for the next commands."
 - "Build this .NET project with InazumaPwsh. Show the compiler errors first and consult the full log if the build fails outside compilation."
 - "Run this project's Playwright tests and summarize the failures and available trace paths."
 - "Inspect this Playwright trace for failed actions, HTTP errors, and console errors."
-- "Run the pytest suite with InazumaPwsh and fix the first failure."
-- "Run `bun test` with InazumaPwsh and show me the failing files and lines."
-- "Run Vitest with InazumaPwsh for `src/utils` only and explain why the import failed."
-- "Peek at this design document with InazumaPwsh, then read only the section about approvals."
-- "Summarize the errors in this build log with InazumaPwsh before opening it."
+- "Run the pytest suite with Zuma MCP and fix the first failure."
+- "Run `bun test` with Zuma MCP and show me the failing files and lines."
+- "Run Vitest with Zuma MCP for `src/utils` only and explain why the import failed."
+- "Peek at this design document with Zuma MCP, then read only the section about approvals."
+- "Summarize the errors in this build log with Zuma MCP before opening it."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
 ## Requirements and installation
 
-- Windows x64 and VS Code 1.101 or later.
-- External PowerShell 7 (`pwsh.exe`) installed on the system (only PowerShell 7.7.0 has been verified in practice). The server searches `PATH` by default, or you can specify an explicit executable path via the `inazumaPwsh.pwshPath` setting or `INAZUMA_PWSH_PATH` environment variable. An invalid explicit path fails immediately without fallback.
+- VS Code 1.101 or later. Windows x64 is the verified platform; Linux and macOS are experimental (see "What's new in 0.5.0").
+- External PowerShell 7 (`pwsh.exe` on Windows, `pwsh` on Linux/macOS) installed on the system (only PowerShell 7.7.0 has been verified in practice). The server searches `PATH` by default, or you can specify an explicit executable path via the `inazumaPwsh.pwshPath` setting or `INAZUMA_PWSH_PATH` environment variable. An invalid explicit path fails immediately without fallback.
 - The extension bundles the server binary and the worker script (`powershell-worker.ps1`). The worker script runs under the external PowerShell 7 process to manage session runspaces.
 - A trusted workspace. The extension runs in the local extension host, including when a remote workspace is open; it does not switch to the remote shell or filesystem.
 - Install the supplied Windows x64 VSIX using **Extensions: Install from VSIX** or from the Visual Studio Code Marketplace. The extension registers its MCP server automatically; no `mcp.json` entry is required. Follow VS Code's prompts to trust the workspace, start the server, and approve tool calls.
 - Build diagnostics require the .NET SDK; Playwright diagnostics require Node.js and a locally installed Playwright package. `run_bun_test` requires Bun on `PATH`, `run_pytest` requires a Python interpreter with pytest installed, and `run_vitest` requires Node.js and a locally installed Vitest package.
 
-The InazumaPwsh project code is licensed under the MIT License, copyright 2026 Shunsuke F. Bundled third-party components retain their own licenses; see `LICENSE` and `THIRD-PARTY-NOTICES.txt` for details. Repository: https://github.com/furukawa658/inazuma-pwsh
+The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shunsuke F. Bundled third-party components retain their own licenses; see `LICENSE` and `THIRD-PARTY-NOTICES.txt` for details. Repository: https://github.com/furukawa658/inazuma-pwsh
 
 ## Tools
 
@@ -94,6 +108,7 @@ The InazumaPwsh project code is licensed under the MIT License, copyright 2026 S
 | `run_bun_test` | Run `bun test` and return test counts and failures with file, line, message, and stack from its JUnit XML report. |
 | `run_pytest` | Run pytest and return test counts and failures with file, line, and message from its JUnit XML report. |
 | `run_vitest` | Run locally installed Vitest once (`vitest run`) and return test counts, failures, and file-level errors from its JSON report. |
+| `run_tsc` | Run the locally installed TypeScript compiler (`tsc --noEmit`) and return diagnostics with file, line, column, code, and message. |
 | `peek_file` | Return a text file's type, encoding, line count, outline with line ranges, and a `FULL` or `PARTIAL` reading recommendation. |
 | `read_section` | Return one outline entry by title search, or a line range, with line numbers and a `nextLine` for continuation. |
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
@@ -124,9 +139,9 @@ The test runner tools manage their report options: `run_bun_test` rejects `--rep
 
 ## Safety and logs
 
-Scripts run with the current user's permissions. InazumaPwsh is not a security sandbox, and syntax checks do not restrict unauthorized system operations. Connect only trusted local clients, and do not put credentials in scripts. Avoid interactive commands, GUI prompts, authentication prompts, and elevation requests.
+Scripts run with the current user's permissions. Zuma MCP is not a security sandbox, and syntax checks do not restrict unauthorized system operations. Connect only trusted local clients, and do not put credentials in scripts. Avoid interactive commands, GUI prompts, authentication prompts, and elevation requests.
 
-Cancellation and timeouts request PowerShell to stop. An uninterruptible .NET call can continue after the response; its session remains unavailable while stopping. After a 10-second stop grace period, the server terminates the worker and its Windows Job Object process tree; session state is lost. Diagnostic tools also use a Windows Job Object on cancellation or timeout. The extension requests shutdown when its parent extension host exits.
+Cancellation and timeouts request PowerShell to stop. An uninterruptible .NET call can continue after the response; its session remains unavailable while stopping. After a 10-second stop grace period, the server terminates the worker and its process tree (Windows Job Object on Windows, `Process.Kill(entireProcessTree)` on Linux/macOS); session state is lost. On Linux/macOS there is no Job Object, so workers may be orphaned if the server process crashes. Diagnostic tools also use a Windows Job Object on cancellation or timeout. The extension requests shutdown when its parent extension host exits.
 
 Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` identifies an execution log; `fullReportPath`, when present, identifies detailed structured diagnostics. Logs older than 3 days, or beyond 200 MB in total, are deleted at server startup, and they may contain sensitive output. Review and remove them when no longer needed.
 
@@ -140,8 +155,8 @@ From the project directory:
 dotnet build InazumaPwsh.csproj --nologo -v:q
 node test-mcp.mjs
 $sourceRoot = (Get-Location).Path
-dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.4.1 --nologo -v:q
-node test-mcp.mjs artifacts/win-x64-0.4.1/InazumaPwsh.exe
+dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.5.0 --nologo -v:q
+node test-mcp.mjs artifacts/win-x64-0.5.0/InazumaPwsh.exe
 ```
 
 Reproducibility requires the same source, SDK, runtime, dependencies, and build settings. Path mapping alone is not a guarantee across builds.
