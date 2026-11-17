@@ -21,7 +21,8 @@
     "mcp", "model context protocol", "copilot", "agent", "ai",
     "powershell", "pwsh", "csharp", "c#", "dotnet", ".net", "msbuild",
     "typescript", "javascript", "tsc", "bun", "node", "vitest", "playwright",
-    "python", "pytest", "test", "diagnostics", "terminal"
+    "python", "pytest", "test", "diagnostics", "terminal",
+    "shell", "windows", "bun test", "dotnet test", "ps1"
   ],
   "extensionKind": ["ui"],
   "main": "./extension.js",
