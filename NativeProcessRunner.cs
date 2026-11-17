@@ -48,7 +48,7 @@ public static class NativeProcessRunner
         cancellationToken.ThrowIfCancellationRequested();
         if (!process.Start()) throw new IOException("Native process did not start.");
         process.StandardInput.Close();
-        using var job = WindowsProcessJob.Attach(process);
+        using var job = ProcessJob.Attach(process);
         var stdout = DrainAsync(process.StandardOutput);
         var stderr = DrainAsync(process.StandardError);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 300)));

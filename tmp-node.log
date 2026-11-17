@@ -1,0 +1,42 @@
+MCP_INITIALIZE_MS 592.0
+PASS public tool descriptions are in English
+PASS responses do not escape quotes or Japanese
+PASS compactResponse defaults to true
+PASS native UTF-8 output is decoded
+PASS redirected native stderr stays plain text
+PEEK_RATIO 0.162
+PASS peek_file outlines markdown and recommends partial reads
+PASS read_section returns only the requested section
+PASS peek_file outlines C# and falls back for text
+PASS read_section decodes Shift_JIS
+LOG_RATIO 0.123
+PASS summarize_log groups repeated errors
+PASS file tools reject relative paths
+MCP_WARM_CALL_MEDIAN_MS 7.2
+SDK_ARGUMENT_ERROR tool_isError
+PASS SDK rejects argument type mismatches
+PASS standard commands without inherited module paths
+PASS direct Python execution completes
+MCP_NEW_SESSION_INITIALIZE_MS 1213.1
+PASS timeout returns promptly for blocking .NET calls
+node:internal/modules/run_main:111
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: t-uzIhOI","Extension":"","CreationTime":"2026-11-16T23:21:37.0862346+09:00","CreationTimeUtc":"2026-11-16T14:21:37.0862346Z","LastAccessTime":"2026-11-16T23:21:39.7859456+09:00","LastAccessTimeUtc":"2026-11-16T14:21:39.7859456Z","LastWriteTime":"2026-11-16T23:21:39.4909869+09:00","LastWriteTimeUtc":"2026-11-16T14:21:39.4909869Z","LinkTarget":null,"UnixFileMode":-1,"Attributes":16},"durationMs":40}
+
+'object' !== 'string'
+
+    at file:///C:/Kanko-AX-Foundation/Kanko-AI-workspace/tmp/inazuma-pwsh-v030/test-mcp.mjs:318:16
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async check (file:///C:/Kanko-AX-Foundation/Kanko-AI-workspace/tmp/inazuma-pwsh-v030/test-mcp.mjs:77:5)
+    at async file:///C:/Kanko-AX-Foundation/Kanko-AI-workspace/tmp/inazuma-pwsh-v030/test-mcp.mjs:315:5 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'object',
+  expected: 'string',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.13.0

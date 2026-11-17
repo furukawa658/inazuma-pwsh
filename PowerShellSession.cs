@@ -9,7 +9,7 @@ public sealed class PowerShellSession : IDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private Process? _process;
-    private WindowsProcessJob? _job;
+    private ProcessJob? _job;
     private NamedPipeServerStream? _pipeServer;
     private StreamReader? _reader;
     private StreamWriter? _writer;
@@ -32,6 +32,12 @@ public sealed class PowerShellSession : IDisposable
         }
     }
 
+    public static void ValidateEnvironment()
+    {
+        ResolvePwshPath();
+        ResolveWorkerPath();
+    }
+
     private static string ResolvePwshPath()
     {
         var overridePath = Environment.GetEnvironmentVariable("INAZUMA_PWSH_PATH");
@@ -44,20 +50,24 @@ public sealed class PowerShellSession : IDisposable
             throw new FileNotFoundException($"The specified INAZUMA_PWSH_PATH does not exist: {overridePath}");
         }
 
+        var executableName = OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh";
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
+        var dirs = string.IsNullOrEmpty(pathEnv)
+            ? new List<string>()
+            : pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        if (!OperatingSystem.IsWindows())
         {
-            var dirs = pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            foreach (var dir in dirs)
-            {
-                var candidate = Path.Combine(dir, "pwsh.exe");
-                if (File.Exists(candidate)) return Path.GetFullPath(candidate);
-                var candidateNoExt = Path.Combine(dir, "pwsh");
-                if (File.Exists(candidateNoExt)) return Path.GetFullPath(candidateNoExt);
-            }
+            var home = Environment.GetEnvironmentVariable("HOME");
+            dirs.AddRange(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"]);
+            if (!string.IsNullOrEmpty(home)) dirs.Add(Path.Combine(home, ".dotnet", "tools"));
+        }
+        foreach (var dir in dirs)
+        {
+            var candidate = Path.Combine(dir, executableName);
+            if (File.Exists(candidate)) return Path.GetFullPath(candidate);
         }
 
-        throw new FileNotFoundException("Could not locate pwsh.exe in PATH. PowerShell 7 or higher is required.");
+        throw new FileNotFoundException($"Could not locate {executableName} in PATH. PowerShell 7 or higher is required.");
     }
 
     private static string ResolveWorkerPath()
@@ -143,16 +153,16 @@ public sealed class PowerShellSession : IDisposable
             throw new InvalidOperationException($"Failed to start external PowerShell process: {pwshPath}");
         }
 
-        WindowsProcessJob? job = null;
+        ProcessJob? job = null;
         try
         {
-            job = WindowsProcessJob.Attach(process);
+            job = ProcessJob.Attach(process);
         }
         catch (Exception ex)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             pipeServer.Dispose();
-            throw new InvalidOperationException($"Failed to attach PowerShell process to Windows Job Object: {ex.Message}", ex);
+            throw new InvalidOperationException($"Failed to attach PowerShell process to process job: {ex.Message}", ex);
         }
 
         _ = DrainAsync(process.StandardError, stderrBuffer);
@@ -457,21 +467,25 @@ public sealed class PowerShellSession : IDisposable
 
             var compressed = await OutputCompressor.CompressAsync(text, maxOutputChars);
 
-            return JsonDefaults.Serialize(new
+            var output = compactResponse && !compressed.IsTruncated && dataObject != null &&
+                compressed.Content == (dataObject is string dataText ? dataText : JsonDefaults.Serialize(dataObject))
+                ? null : compressed.Content;
+
+            // \u7a7a\u30fb\u65e2\u5b9a\u5024\u306e\u30d5\u30a3\u30fc\u30eb\u30c9\u306f\u7701\u7565\u3057\u3066\u5fdc\u7b54\u3092\u77ed\u304f\u3059\u308b
+            var response = new Dictionary<string, object?> { ["status"] = status };
+            if (!compressed.IsTruncated && dataObject != null) response["data"] = dataObject;
+            if (errors.Count > 0) response["errors"] = errors.ToArray();
+            if (warnings.Length > 0) response["warnings"] = warnings;
+            response["durationMs"] = sw.ElapsedMilliseconds;
+            if (exitCode != 0) response["exitCode"] = exitCode;
+            if (compressed.IsTruncated)
             {
-                status,
-                data = compressed.IsTruncated ? null : dataObject,
-                errors = errors.ToArray(),
-                warnings,
-                durationMs = sw.ElapsedMilliseconds,
-                exitCode,
-                isTruncated = compressed.IsTruncated,
-                fullLogPath = compressed.FullLogPath,
-                output = compactResponse && !compressed.IsTruncated && dataObject != null &&
-                    compressed.Content == (dataObject is string dataText ? dataText : JsonDefaults.Serialize(dataObject))
-                    ? null : compressed.Content,
-                stats = new { compressed.OriginalChars, compressed.OriginalLines }
-            });
+                response["isTruncated"] = true;
+                response["fullLogPath"] = compressed.FullLogPath;
+                response["stats"] = new { compressed.OriginalChars, compressed.OriginalLines };
+            }
+            if (output != null) response["output"] = output;
+            return JsonDefaults.Serialize(response);
         }
         finally
         {
@@ -514,3 +528,4 @@ public sealed class PowerShellSession : IDisposable
         }
     }
 }
+
