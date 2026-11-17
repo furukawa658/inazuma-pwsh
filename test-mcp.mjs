@@ -7,7 +7,10 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0/win-x64/InazumaPwsh.exe');
+const hostRid = process.platform === 'win32' ? 'win-x64'
+  : process.platform === 'darwin' ? (process.arch === 'arm64' ? 'osx-arm64' : 'osx-x64')
+  : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
+const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostRid, process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
 const spawnStartedAt = performance.now();
 const server = spawn(executable, process.argv.slice(3), {
     stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '' }
@@ -91,7 +94,7 @@ try {
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
     await check('public tool descriptions are in English', async () => {
-        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'peek_file', 'read_section', 'summarize_log']) {
+        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'peek_file', 'read_section', 'summarize_log']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
             assert.ok(definition?.description, `${name} is missing a description`);
             assert.match(definition.description, /^[\x00-\x7f]+$/, `${name} description is not English`);
@@ -397,7 +400,7 @@ try {
         assert.deepEqual((await call('[pscustomobject]@{ answer = 42 }', { maxOutputChars: 1000 })).data, { answer: 42 });
     });
     await check('nonzero native exit and stream errors', async () => {
-        assert.notEqual((await call("cmd /c 'exit 7'")).status, 'success');
+        assert.notEqual((await call(process.platform === 'win32' ? "cmd /c 'exit 7'" : "sh -c 'exit 7'")).status, 'success');
         assert.notEqual((await call("Write-Error 'broken'; 'partial'")).status, 'success');
         assert.equal((await call('6 * 7')).status, 'success');
     });
@@ -582,12 +585,83 @@ process.exitCode = 1;
         assert.match(rejected.message, /managed by this tool/);
         assert.equal((await tool('run_vitest', { workingDirectory: fixture })).status, 'error');
     });
+    await check('contextLines adds clamped source context to failures', async () => {
+        const project = path.join(fixture, 'context');
+        const cliDirectory = path.join(project, 'node_modules', 'vitest');
+        await mkdir(cliDirectory, { recursive: true });
+        const specPath = path.join(project, 'ctx.spec.ts');
+        const source = Array.from({ length: 30 }, (_, index) => index === 14 ? `expect(1).toBe(2); // ${'x'.repeat(300)}` : `line${index + 1}`);
+        await writeFile(specPath, source.join('\n'));
+        const spec = specPath.replaceAll('\\', '/');
+        const failure = line => ({ fullName: `fails ${line}`, status: 'failed', failureMessages: [`Error: boom\n    at ${spec}:${line}:1`] });
+        const payload = { success: false, testResults: [{ name: spec, status: 'failed', message: '', assertionResults: [failure(15), failure(1), failure(30)] }] };
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
+        const withContext = await tool('run_vitest', { workingDirectory: project, contextLines: 2 });
+        const [middle, first, last] = withContext.failures;
+        assert.match(middle.codeContext, /^ 13\| line13\n 14\| line14\n>15\| expect\(1\)\.toBe\(2\); \/\/ x+\.\.\.\n 16\| line16\n 17\| line17$/, middle.codeContext);
+        assert.ok(middle.codeContext.split('\n')[2].length <= 170);
+        assert.match(first.codeContext, /^>1\| line1\n 2\| line2\n 3\| line3$/, first.codeContext);
+        assert.match(last.codeContext, /\n>30\| line30$/, last.codeContext);
+        const huge = await tool('run_vitest', { workingDirectory: project, contextLines: 99 });
+        assert.equal(huge.failures[0].codeContext.split('\n').length, 21);
+        assert.ok(JSON.stringify(huge).length <= 8000);
+        for (const lines of [0, -3]) assert.equal((await tool('run_vitest', { workingDirectory: project, contextLines: lines })).failures[0].codeContext, undefined);
+        await rm(withContext.fullLogPath);
+    });
+    await check('run_tsc parses diagnostics, counts and rejects managed arguments', async () => {
+        const project = path.join(fixture, 'tsc');
+        const libDirectory = path.join(project, 'node_modules', 'typescript', 'lib');
+        await mkdir(libDirectory, { recursive: true });
+        await writeFile(path.join(project, 'a.ts'), 'const a: number = "x";\nconst b = 1;');
+        const mock = path.join(libDirectory, 'tsc.js');
+        const script = body => `if (!process.argv.includes('--noEmit') || process.argv[process.argv.indexOf('--pretty') + 1] !== 'false') process.exit(9);\n${body}`;
+        const errors = Array.from({ length: 20 }, (_, index) => `src/f${index}.ts(${index + 1},5): error TS${index % 2 ? 2322 : 2304}: Problem ${index}${'y'.repeat(400)}\n  Type 'string' is not assignable.`);
+        errors.unshift('a.ts(1,7): error TS2322: Type \'string\' is not assignable to type \'number\'.');
+        await writeFile(mock, script(`console.log(${JSON.stringify(errors.join('\n'))}); process.exitCode = 2;`));
+        const failed = await tool('run_tsc', { workingDirectory: project, contextLines: 1 });
+        assert.equal(failed.status, 'error', JSON.stringify(failed));
+        assert.equal(failed.errorCount, 21);
+        assert.deepEqual(failed.errorCodeCounts, { TS2322: 11, TS2304: 10 });
+        assert.equal(failed.diagnostics.length > 0 && failed.diagnostics.length <= 15, true);
+        assert.equal(failed.diagnostics[0].file, 'a.ts');
+        assert.equal(failed.diagnostics[0].line, 1);
+        assert.equal(failed.diagnostics[0].column, 7);
+        assert.equal(failed.diagnostics[0].code, 'TS2322');
+        assert.match(failed.diagnostics[0].codeContext, /^>1\| const a: number = "x";\n 2\| const b = 1;$/);
+        assert.ok(failed.diagnostics.every(item => item.message.length <= 323));
+        assert.ok(JSON.stringify(failed).length <= 8000);
+        await rm(failed.fullLogPath);
+
+        await writeFile(mock, script('process.exitCode = 0;'));
+        const success = await tool('run_tsc', { workingDirectory: project });
+        assert.equal(success.status, 'success', JSON.stringify(success));
+        assert.equal(success.errorCount, 0);
+        await rm(success.fullLogPath);
+
+        await writeFile(mock, script("console.log('error TS5057: Cannot find a tsconfig.json file at the specified directory.'); process.exitCode = 1;"));
+        const noConfig = await tool('run_tsc', { workingDirectory: project });
+        assert.equal(noConfig.status, 'error');
+        assert.equal(noConfig.diagnostics[0].code, 'TS5057');
+        assert.equal(noConfig.diagnostics[0].file, undefined);
+        await rm(noConfig.fullLogPath);
+
+        await writeFile(mock, script("console.log('internal crash'); process.exitCode = 1;"));
+        const crash = await tool('run_tsc', { workingDirectory: project });
+        assert.equal(crash.status, 'error');
+        assert.equal(crash.errorCount, 0);
+        await rm(crash.fullLogPath);
+
+        for (const argument of ['--pretty', '--watch', '-w', '--noEmit', '-b'])
+            assert.match((await tool('run_tsc', { workingDirectory: project, tscArgs: [argument] })).message, /managed by this tool/);
+        assert.equal((await tool('run_tsc', { workingDirectory: fixture })).status, 'error');
+        assert.match((await tool('run_tsc', { workingDirectory: project, tscPath: 'relative.js' })).message, /absolute/);
+    });
     await check('pytest JUnit XML parsing with a fake interpreter', async () => {
         const project = path.join(fixture, 'pytest');
         await mkdir(project);
-        const fakePython = path.join(project, 'fake-python.cmd');
+        const fakePython = path.join(project, process.platform === 'win32' ? 'fake-python.cmd' : 'fake-python');
         await writeFile(path.join(project, 'fake-pytest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--junitxml=')).slice(11); if (process.argv[2] !== '-m' || process.argv[3] !== 'pytest') process.exit(9); const mode = fs.readFileSync('mode.txt', 'utf8').trim(); const payloads = JSON.parse(fs.readFileSync('payloads.json', 'utf8')); fs.writeFileSync(out, payloads[mode].xml); process.exitCode = payloads[mode].exitCode;`);
-        await writeFile(fakePython, '@node "%~dp0fake-pytest.mjs" %*\r\n');
+        await writeFile(fakePython, process.platform === 'win32' ? '@node "%~dp0fake-pytest.mjs" %*\r\n' : '#!/bin/sh\nexec node "$(dirname "$0")/fake-pytest.mjs" "$@"\n', { mode: 0o755 });
         await writeFile(path.join(project, 'payloads.json'), JSON.stringify({
             failed: { exitCode: 1, xml: `<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="4" time="0.5"><testcase classname="test_sample" name="test_passes" time="0.001" /><testcase classname="test_sample" name="test_fails" time="0.001"><failure message="AssertionError: assert 1 == 2">def test_fails():\n&gt;       assert 1 == 2\nE       AssertionError: assert 1 == 2\n\ntest_sample.py:9: AssertionError</failure></testcase><testcase classname="test_sample" name="test_skipped" time="0"><skipped type="pytest.skip" message="demo">test_sample.py:12: demo</skipped></testcase><testcase classname="test_sample" name="test_setup" time="0"><error message="failed on setup">file ${project}\\test_sample.py, line 17\n  def test_setup(missing_fixture):\nE       fixture 'missing_fixture' not found</error></testcase></testsuite></testsuites>` },
             empty: { exitCode: 5, xml: '<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="0" time="0.01" /></testsuites>' },
@@ -615,7 +689,7 @@ process.exitCode = 1;
 
         const rejected = await tool('run_pytest', { workingDirectory: project, testArgs: ['--junitxml=other.xml'] });
         assert.match(rejected.message, /managed by this tool/);
-        const relative = await tool('run_pytest', { workingDirectory: project, pythonPath: 'python.exe' });
+        const relative = await tool('run_pytest', { workingDirectory: project, pythonPath: process.platform === 'win32' ? 'python.exe' : 'python3' });
         assert.match(relative.message, /pythonPath must be/);
     });
     if (process.env.INAZUMA_TEST_PYTHON) {
@@ -754,3 +828,4 @@ process.exitCode = 1;
     if (server.exitCode === null) server.kill();
     await rm(fixture, { recursive: true, force: true });
 }
+

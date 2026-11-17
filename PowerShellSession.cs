@@ -9,7 +9,7 @@ public sealed class PowerShellSession : IDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private Process? _process;
-    private WindowsProcessJob? _job;
+    private ProcessJob? _job;
     private NamedPipeServerStream? _pipeServer;
     private StreamReader? _reader;
     private StreamWriter? _writer;
@@ -50,20 +50,24 @@ public sealed class PowerShellSession : IDisposable
             throw new FileNotFoundException($"The specified INAZUMA_PWSH_PATH does not exist: {overridePath}");
         }
 
+        var executableName = OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh";
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
+        var dirs = string.IsNullOrEmpty(pathEnv)
+            ? new List<string>()
+            : pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        if (!OperatingSystem.IsWindows())
         {
-            var dirs = pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            foreach (var dir in dirs)
-            {
-                var candidate = Path.Combine(dir, "pwsh.exe");
-                if (File.Exists(candidate)) return Path.GetFullPath(candidate);
-                var candidateNoExt = Path.Combine(dir, "pwsh");
-                if (File.Exists(candidateNoExt)) return Path.GetFullPath(candidateNoExt);
-            }
+            var home = Environment.GetEnvironmentVariable("HOME");
+            dirs.AddRange(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"]);
+            if (!string.IsNullOrEmpty(home)) dirs.Add(Path.Combine(home, ".dotnet", "tools"));
+        }
+        foreach (var dir in dirs)
+        {
+            var candidate = Path.Combine(dir, executableName);
+            if (File.Exists(candidate)) return Path.GetFullPath(candidate);
         }
 
-        throw new FileNotFoundException("Could not locate pwsh.exe in PATH. PowerShell 7 or higher is required.");
+        throw new FileNotFoundException($"Could not locate {executableName} in PATH. PowerShell 7 or higher is required.");
     }
 
     private static string ResolveWorkerPath()
@@ -149,16 +153,16 @@ public sealed class PowerShellSession : IDisposable
             throw new InvalidOperationException($"Failed to start external PowerShell process: {pwshPath}");
         }
 
-        WindowsProcessJob? job = null;
+        ProcessJob? job = null;
         try
         {
-            job = WindowsProcessJob.Attach(process);
+            job = ProcessJob.Attach(process);
         }
         catch (Exception ex)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             pipeServer.Dispose();
-            throw new InvalidOperationException($"Failed to attach PowerShell process to Windows Job Object: {ex.Message}", ex);
+            throw new InvalidOperationException($"Failed to attach PowerShell process to process job: {ex.Message}", ex);
         }
 
         _ = DrainAsync(process.StandardError, stderrBuffer);
@@ -524,3 +528,4 @@ public sealed class PowerShellSession : IDisposable
         }
     }
 }
+

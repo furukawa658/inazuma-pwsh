@@ -5,16 +5,18 @@ using Microsoft.Win32.SafeHandles;
 
 namespace InazumaPwsh;
 
-internal sealed class WindowsProcessJob : IDisposable
+internal sealed class ProcessJob : IDisposable
 {
-    private readonly SafeFileHandle _handle;
-    private WindowsProcessJob(SafeFileHandle handle) => _handle = handle;
+    private readonly SafeFileHandle? _handle;
+    private ProcessJob(SafeFileHandle? handle) => _handle = handle;
 
-    public static WindowsProcessJob Attach(Process process)
+    // On Linux and macOS no job exists; callers rely on Process.Kill(entireProcessTree: true).
+    public static ProcessJob Attach(Process process)
     {
+        if (!OperatingSystem.IsWindows()) return new ProcessJob(null);
         var handle = CreateJobObject(IntPtr.Zero, null);
         if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
-        var job = new WindowsProcessJob(handle);
+        var job = new ProcessJob(handle);
         var info = new ExtendedLimitInformation { BasicLimitInformation = new BasicLimitInformation { LimitFlags = 0x2000 } };
         try
         {
@@ -32,7 +34,7 @@ internal sealed class WindowsProcessJob : IDisposable
         }
     }
 
-    public void Dispose() => _handle.Dispose();
+    public void Dispose() => _handle?.Dispose();
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimitInformation
