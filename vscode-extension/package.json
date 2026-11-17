@@ -1,5 +1,5 @@
 {
-  "name": "zuma-mcp",
+  "name": "inazuma-pwsh",
   "displayName": "Zuma MCP",
   "description": "Persistent PowerShell sessions and structured .NET, Playwright, bun test, pytest, and Vitest diagnostics for AI coding in VS Code on Windows, Linux, and macOS.",
   "version": "0.5.0",
