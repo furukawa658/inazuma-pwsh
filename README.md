@@ -16,6 +16,11 @@ These are single-file measurements. Savings across complete chats have not been 
 
 Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent local PowerShell 7 sessions. Reuse variables, modules, and your working location across tool calls; investigate .NET build, TypeScript (`tsc`), Playwright, bun test, pytest, and Vitest failures through structured diagnostics; and read large files and logs by outline, section, or summary, with full logs available when you need the details.
 
+## What's new in 0.6.1
+
+- The MCP server is shown as `Zuma` in VS Code.
+- PowerShell outlines use PowerShell's parser without executing the file. Markdown outlines respect the length of fenced code blocks. PowerShell outline queries start a separate PowerShell process and may take longer.
+
 ## What's new in 0.6.0
 
 ### See how much you save

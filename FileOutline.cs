@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -148,6 +150,8 @@ internal static partial class FileOutline
         List<OutlineEntry> entries = kind switch
         {
             "markdown" => OutlineMarkdown(lines),
+            "code" when Path.GetExtension(path).Equals(".ps1", StringComparison.OrdinalIgnoreCase) ||
+                        Path.GetExtension(path).Equals(".psm1", StringComparison.OrdinalIgnoreCase) => OutlinePowerShell(lines),
             "code" => OutlineCode(lines),
             "json" => OutlineJson(lines),
             "yaml" => OutlineYaml(lines),
@@ -166,7 +170,8 @@ internal static partial class FileOutline
     {
         var entries = new List<OutlineEntry>();
         bool inFence = false;
-        string? fenceMarker = null;
+        char fenceMarker = '\0';
+        int fenceLength = 0;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -179,7 +184,8 @@ internal static partial class FileOutline
                 if (trimmedStart.StartsWith("```") || trimmedStart.StartsWith("~~~"))
                 {
                     inFence = true;
-                    fenceMarker = trimmedStart.StartsWith("```") ? "```" : "~~~";
+                    fenceMarker = trimmedStart[0];
+                    fenceLength = trimmedStart.TakeWhile(character => character == fenceMarker).Count();
                     continue;
                 }
 
@@ -194,16 +200,91 @@ internal static partial class FileOutline
             }
             else
             {
-                if (trimmedStart.StartsWith(fenceMarker!))
+                int markerLength = trimmedStart.TakeWhile(character => character == fenceMarker).Count();
+                if (markerLength >= fenceLength && string.IsNullOrWhiteSpace(trimmedStart[markerLength..]))
                 {
                     inFence = false;
-                    fenceMarker = null;
+                    fenceMarker = '\0';
                 }
             }
         }
 
         ComputeHierarchicalEnds(entries, lines.Length);
         return entries;
+    }
+
+    private static List<OutlineEntry> OutlinePowerShell(string[] lines)
+    {
+        const string parser = """
+            $encoded = [Console]::In.ReadToEnd()
+            $source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+            $tokens = $null
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+            $nodes = $ast.FindAll({ param($node)
+                ($node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Parent -isnot [System.Management.Automation.Language.FunctionMemberAst]) -or
+                $node -is [System.Management.Automation.Language.TypeDefinitionAst] -or
+                $node -is [System.Management.Automation.Language.FunctionMemberAst]
+            }, $true)
+            $entries = @($nodes | ForEach-Object {
+                $level = 1
+                $parent = $_.Parent
+                while ($null -ne $parent) {
+                        if (($parent -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                            $parent.Parent -isnot [System.Management.Automation.Language.FunctionMemberAst]) -or
+                        $parent -is [System.Management.Automation.Language.TypeDefinitionAst] -or
+                        $parent -is [System.Management.Automation.Language.FunctionMemberAst]) { $level++ }
+                    $parent = $parent.Parent
+                }
+                @{ start = $_.Extent.StartLineNumber; end = $_.Extent.EndLineNumber; level = $level }
+            })
+            [Console]::Out.Write((ConvertTo-Json -InputObject $entries -Compress))
+            """;
+        var startInfo = new ProcessStartInfo(PowerShellSession.ResolvePwshPath())
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-EncodedCommand");
+        startInfo.ArgumentList.Add(Convert.ToBase64String(Encoding.Unicode.GetBytes(parser)));
+        try
+        {
+            using var process = Process.Start(startInfo) ?? throw new IOException("Could not start PowerShell parser.");
+            try
+            {
+                var output = process.StandardOutput.ReadToEndAsync();
+                var error = process.StandardError.ReadToEndAsync();
+                var input = process.StandardInput.WriteAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Join('\n', lines))));
+                if (!input.Wait(TimeSpan.FromSeconds(20))) throw new IOException("PowerShell parser input timed out.");
+                process.StandardInput.Close();
+                if (!process.WaitForExit(20000)) throw new IOException("PowerShell parser timed out.");
+                if (process.ExitCode != 0) throw new IOException($"PowerShell parser failed: {error.GetAwaiter().GetResult()}");
+                using var document = JsonDocument.Parse(output.GetAwaiter().GetResult());
+                var entries = new List<OutlineEntry>();
+                foreach (var item in document.RootElement.EnumerateArray())
+                {
+                    int start = item.GetProperty("start").GetInt32();
+                    string title = lines[start - 1].Trim();
+                    if (title.Length > 120) title = title[..120];
+                    entries.Add(new OutlineEntry(start, item.GetProperty("end").GetInt32(), item.GetProperty("level").GetInt32(), title));
+                }
+                return entries;
+            }
+            finally
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or AggregateException or JsonException or InvalidOperationException)
+        {
+            throw new IOException("PowerShell parser failed.", exception);
+        }
     }
 
     private static List<OutlineEntry> OutlineCode(string[] lines)

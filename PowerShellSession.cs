@@ -38,7 +38,7 @@ public sealed class PowerShellSession : IDisposable
         ResolveWorkerPath();
     }
 
-    private static string ResolvePwshPath()
+    internal static string ResolvePwshPath()
     {
         var overridePath = Environment.GetEnvironmentVariable("INAZUMA_PWSH_PATH");
         if (!string.IsNullOrWhiteSpace(overridePath))

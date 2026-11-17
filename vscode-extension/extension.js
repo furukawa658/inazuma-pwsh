@@ -98,7 +98,7 @@ function activate(context) {
             const pwshPath = vscode.workspace.getConfiguration('inazumaPwsh').get('pwshPath', '').trim();
             const environment = pwshPath ? { INAZUMA_PWSH_PATH: pwshPath } : undefined;
             const definition = new vscode.McpStdioServerDefinition(
-                'InazumaPwsh', executable, ['--parent-pid', String(process.pid)], environment, version);
+                'Zuma', executable, ['--parent-pid', String(process.pid)], environment, version);
             definition.cwd = vscode.Uri.file(path.dirname(executable));
             return [definition];
         },
