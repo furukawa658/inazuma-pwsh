@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -798,6 +798,40 @@ process.exitCode = 1;
             assert.equal(inspected.status, 'inspected', JSON.stringify(inspected));
             assert.ok(inspected.latestDomSnapshot?.includes('Actual result'), JSON.stringify(inspected));
             assert.ok(JSON.stringify(inspected).includes('fixture console error'), JSON.stringify(inspected));
+        });
+    }
+    const startWith = env => new Promise((resolve, reject) => {
+        const child = spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], env });
+        let output = '';
+        const timer = setTimeout(() => { child.kill(); reject(new Error(`server did not respond: ${output}`)); }, 60000);
+        child.stderr.on('data', chunk => { output += chunk; });
+        createInterface({ input: child.stdout }).once('line', () => { clearTimeout(timer); child.kill(); resolve({ started: true, output }); });
+        child.once('exit', code => { clearTimeout(timer); resolve({ started: false, code, output }); });
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+            protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pwsh-path-test', version: '1' }
+        } }) + '\n');
+    });
+    await check('invalid explicit pwsh path explains the fix', async () => {
+        const started = await startWith({ ...process.env, INAZUMA_PWSH_PATH: path.join(fixture, 'missing', 'pwsh.exe') });
+        assert.equal(started.started, false, started.output);
+        assert.equal(started.code, 1, started.output);
+        assert.match(started.output, /InazumaPwsh cannot start: .*inazumaPwsh\.pwshPath/);
+        assert.doesNotMatch(started.output, /Unhandled exception/);
+    });
+    if (process.platform === 'win32') {
+        await check('Windows finds pwsh outside PATH', async () => {
+            const candidates = [
+                path.join(process.env.ProgramFiles ?? '', 'PowerShell', '7', 'pwsh.exe'),
+                path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'WindowsApps', 'pwsh.exe'),
+                path.join(process.env.USERPROFILE ?? '', '.dotnet', 'tools', 'pwsh.exe')
+            ];
+            const installed = (await Promise.all(candidates.map(file => lstat(file).then(() => true, () => false)))).some(Boolean);
+            const env = { ...process.env, PATH: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32') };
+            delete env.INAZUMA_PWSH_PATH;
+            delete env.Path;
+            const started = await startWith(env);
+            assert.equal(started.started, installed, started.output);
+            if (!installed) assert.match(started.output, /standard install locations/);
         });
     }
     await check('parent process lifetime', async () => {
