@@ -23,6 +23,7 @@ jobs:
           node-version: 22
       - run: node vscode-extension/build-target.mjs ${{ matrix.target }}
       - name: Publish to Marketplace
+        shell: bash
         working-directory: vscode-extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
