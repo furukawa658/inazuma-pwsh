@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -66,6 +66,7 @@ async function call(script, extra = {}) {
 async function rawCall(script, extra = {}) {
     const message = await request('tools/call', { name: 'execute_powershell', arguments: { script, ...extra } }).response;
     assert.equal(message.error, undefined, JSON.stringify(message.error));
+    assert.notEqual(message.result?.isError, true, `${JSON.stringify(message.result)}\n${stderr}`);
     return message.result.content.find(item => item.type === 'text').text;
 }
 
@@ -383,7 +384,7 @@ try {
     });
     await check('explicit working directory and invalid path', async () => {
         const before = (await call('(Get-Location).Path')).data;
-        assert.equal(path.resolve((await call('(Get-Location).Path', { workingDirectory: fixture })).data), path.resolve(fixture));
+        assert.equal(await realpath((await call('(Get-Location).Path', { workingDirectory: fixture })).data), await realpath(fixture));
         assert.equal((await call('(Get-Location).Path')).data, before);
         const invalid = await call("'must not execute'", { workingDirectory: path.join(fixture, 'missing') });
         assert.equal(invalid.status, 'error');

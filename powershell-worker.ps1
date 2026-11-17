@@ -35,7 +35,9 @@ $writer.AutoFlush = $true
 $writer.NewLine = "`n"
 
 $initialSessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-$initialSessionState.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::RemoteSigned
+if ($IsWindows) {
+    $initialSessionState.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::RemoteSigned
+}
 $initialSessionState.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableEntry]::new("ConfirmPreference", [System.Management.Automation.ConfirmImpact]::None, ""))
 $initialSessionState.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableEntry]::new("ProgressPreference", [System.Management.Automation.ActionPreference]::SilentlyContinue, ""))
 
