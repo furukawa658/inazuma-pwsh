@@ -87,6 +87,7 @@ const startedAt = performance.now();
 let passed = 0;
 async function check(name, run) {
     if (process.env.INAZUMA_OUTLINE_ONLY && !name.startsWith('outline regression')) return;
+    if (process.env.INAZUMA_USAGE_ONLY && name !== 'usage accounting for unmeasured calls') return;
     await run();
     passed++;
     console.log(`PASS ${name}`);
@@ -930,11 +931,33 @@ process.exitCode = 1;
         assert.deepEqual([bounded.filesMatched, bounded.totalMatches, bounded.files.length, bounded.truncated], [60, 600, 40, true]);
         assert.ok(JSON.stringify(bounded).length <= 8000, String(JSON.stringify(bounded).length));
     });
+    await check('usage accounting for unmeasured calls', async () => {
+        const usagePath = path.join(tmpdir(), 'inazuma-pwsh-logs', 'usage.jsonl');
+        const before = await readFile(usagePath, 'utf8').catch(error => {
+            if (error.code === 'ENOENT') return '';
+            throw error;
+        });
+        const docPath = path.join(fixture, 'usage.txt');
+        await writeFile(docPath, 'searchable content\n');
+        assert.equal((await call('42')).status, 'success');
+        assert.equal((await tool('search_files', { path: docPath, pattern: 'content' })).status, 'success');
+        assert.equal((await tool('search_files', { path: docPath, pattern: '(' })).status, 'error');
+        assert.equal((await tool('reset_powershell_session', {})).status, 'success');
+        assert.equal((await tool('run_eslint', { workingDirectory: 'relative' })).status, 'error');
+        assert.equal((await tool('peek_file', { path: docPath })).status, 'success');
+        const entries = (await readFile(usagePath, 'utf8')).slice(before.length).trim().split('\n').map(line => JSON.parse(line));
+        for (const [name, count] of [['execute_powershell', 1], ['search_files', 2], ['reset_powershell_session', 1], ['run_eslint', 1]]) {
+            const matching = entries.filter(entry => entry.tool === name && entry.countOnly === true);
+            assert.equal(matching.length, count, `${name} count`);
+            assert.ok(matching.every(entry => entry.sourceBytes === undefined && entry.responseBytes === undefined));
+        }
+        assert.ok(entries.some(entry => entry.tool === 'peek_file' && entry.sourceBytes > 0 && entry.responseBytes > 0));
+    });
     await check('tool calls are recorded in the usage log', async () => {
         const entries = (await readFile(path.join(tmpdir(), 'inazuma-pwsh-logs', 'usage.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
         for (const name of ['run_eslint', 'run_dotnet_test', 'peek_file', 'summarize_log'])
             assert.ok(entries.some(entry => entry.tool === name && entry.sourceBytes > 0 && entry.responseBytes > 0 && entry.time), `${name} is not recorded`);
-        assert.ok(!entries.some(entry => entry.tool === 'search_files' && entry.responseBytes));
+        assert.ok(entries.some(entry => entry.tool === 'search_files' && entry.countOnly === true));
     });
     await check('pytest JUnit XML parsing with a fake interpreter', async () => {
         const project = path.join(fixture, 'pytest');

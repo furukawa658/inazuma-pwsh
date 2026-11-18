@@ -18,7 +18,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         [Description("Absolute path to the working directory.") ] string workingDirectory,
         [Description("Optional project or solution path, not a command string.") ] string? target = null,
         bool includeWarnings = false, int timeoutSeconds = 120, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_dotnet_build", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             var propsPath = Path.Combine(directory, "diagnostics.props");
             var diagnostics = System.Security.SecurityElement.Escape(directory.Replace('\\', '/'));
@@ -41,7 +41,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunDotnetTestAsync(string workingDirectory,
         [Description("Arguments passed to dotnet test, with each argument as a separate array element, for example a project path or --filter.") ] string[]? testArgs = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_dotnet_test", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(testArgs, "--logger", "-l", "--results-directory", "--report-trx");
             var testingPlatform = UsesTestingPlatform(workingDirectory);
@@ -60,7 +60,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunPlaywrightAsync(string workingDirectory,
         [Description("Arguments passed to Playwright test, with each argument as a separate array element.") ] string[]? testArgs = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_playwright", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             var cli = FindPlaywrightCli(workingDirectory);
             if (cli == null) throw new FileNotFoundException("Local Playwright CLI was not found. Install project dependencies first.");
@@ -81,7 +81,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunBunTestAsync(string workingDirectory,
         [Description("Arguments passed to bun test, with each argument as a separate array element.") ] string[]? testArgs = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_bun_test", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(testArgs, "--reporter");
             var reportPath = Path.Combine(directory, "bun.xml");
@@ -100,7 +100,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         [Description("Arguments passed to pytest, with each argument as a separate array element.") ] string[]? testArgs = null,
         [Description("Optional absolute path to the Python executable that has pytest installed.") ] string? pythonPath = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_pytest", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(testArgs, "--junitxml", "--junit-xml");
             var python = ResolvePython(workingDirectory, pythonPath);
@@ -119,7 +119,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunVitestAsync(string workingDirectory,
         [Description("Arguments passed to vitest run, with each argument as a separate array element.") ] string[]? testArgs = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_vitest", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(testArgs, "--reporter", "--outputFile", "--output-file");
             var cli = FindPackageFile(workingDirectory, ["vitest"], "vitest.mjs");
@@ -142,7 +142,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0,
         [Description("When true, list only diagnostics absent from the previous run with the same workingDirectory and tscArgs in this server process, and add newCount and fixedCount.")] bool onlyNew = false,
         CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_tsc", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(tscArgs, "--pretty", "--noEmit", "--watch", "-w", "--preserveWatchOutput", "--init");
             var build = tscArgs?.Any(argument => argument is "--build" or "-b") == true;
@@ -177,7 +177,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunEslintAsync(string workingDirectory,
         [Description("Arguments passed to eslint, with each argument as a separate array element, for example src or --quiet. Defaults to the current directory.") ] string[]? eslintArgs = null,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, CancellationToken cancellationToken = default) =>
-        RunAsync(workingDirectory, timeoutSeconds, async (directory, token) =>
+        RunAsync("run_eslint", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             RejectManagedArguments(eslintArgs, "--format", "-f", "--output-file", "-o");
             var cli = FindPackageFile(workingDirectory, ["eslint"], Path.Combine("bin", "eslint.js"));
@@ -196,20 +196,24 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     [Description("Inspect a trace ZIP without extracting it and return failed actions, HTTP and JavaScript errors, and a DOM excerpt before the failure. This does not replace visual verification of rendering or CSS.")]
     public Task<string> InspectPlaywrightTraceAsync(string tracePath, int maxOutputChars = 6000,
         CancellationToken cancellationToken = default) =>
-        PlaywrightTraceParser.ParseAsync(tracePath, Math.Clamp(maxOutputChars, 1000, 50000), cancellationToken);
+        UsageLog.TrackCallAsync("inspect_playwright_trace", PlaywrightTraceParser.ParseAsync(tracePath, Math.Clamp(maxOutputChars, 1000, 50000), cancellationToken));
 
-    private async Task<string> RunAsync(string workingDirectory, int timeoutSeconds,
+    private async Task<string> RunAsync(string tool, string workingDirectory, int timeoutSeconds,
         Func<string, CancellationToken, Task<string>> action, CancellationToken cancellationToken)
     {
         if (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory))
+        {
+            UsageLog.RecordCall(tool);
             return JsonDefaults.Serialize(new { status = "error", message = "workingDirectory must be an existing absolute directory." });
+        }
         var directory = Path.Combine(Path.GetTempPath(), $"inazuma-diagnostics-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.ApplicationStopping);
         try { return await action(directory, linked.Token); }
-        catch (OperationCanceledException) { return JsonDefaults.Serialize(new { status = "cancelled" }); }
+        catch (OperationCanceledException) { UsageLog.RecordCall(tool); return JsonDefaults.Serialize(new { status = "cancelled" }); }
         catch (Exception exception) when (exception is IOException or ArgumentException or System.ComponentModel.Win32Exception)
         {
+            UsageLog.RecordCall(tool);
             return JsonDefaults.Serialize(new { status = "error", message = exception.Message });
         }
         finally { Directory.Delete(directory, recursive: true); }

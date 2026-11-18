@@ -25,12 +25,15 @@ function summarizeUsage(text) {
     for (const line of text.split('\n')) {
         let entry;
         try { entry = JSON.parse(line); } catch { continue; }
-        if (typeof entry?.tool !== 'string' || !(entry.sourceBytes > 0) || !(entry.responseBytes >= 0)) continue;
+        const measured = entry?.sourceBytes > 0 && entry?.responseBytes >= 0;
+        if (typeof entry?.tool !== 'string' || (!measured && entry.countOnly !== true)) continue;
         since ??= entry.time;
         const item = tools.get(entry.tool) ?? { tool: entry.tool, calls: 0, sourceBytes: 0, responseBytes: 0 };
         item.calls++;
-        item.sourceBytes += entry.sourceBytes;
-        item.responseBytes += entry.responseBytes;
+        if (measured) {
+            item.sourceBytes += entry.sourceBytes;
+            item.responseBytes += entry.responseBytes;
+        }
         tools.set(entry.tool, item);
     }
     const rows = [...tools.values()].sort((a, b) => (b.sourceBytes - b.responseBytes) - (a.sourceBytes - a.responseBytes));
@@ -62,8 +65,9 @@ function registerSavings(context) {
         try { text = await readFile(usagePath, 'utf8'); } catch { }
         summary = summarizeUsage(text);
         if (summary.total.calls === 0) { item.hide(); return; }
-        item.text = `$(zap) ${savedPercent(summary.total)}% saved`;
-        item.tooltip = `Zuma MCP read ${formatBytes(summary.total.sourceBytes)} of files and logs and returned ${formatBytes(summary.total.responseBytes)} in ${summary.total.calls} tool calls${sinceText()}. Click for the breakdown.`;
+        const savings = summary.total.sourceBytes > 0 ? `${savedPercent(summary.total)}% saved | ` : '';
+        item.text = `$(zap) ${savings}${summary.total.calls} calls`;
+        item.tooltip = `Zuma MCP recorded ${summary.total.calls} tool calls${sinceText()}. For calls with measured savings, it read ${formatBytes(summary.total.sourceBytes)} and returned ${formatBytes(summary.total.responseBytes)}. Click for the breakdown.`;
         item.show();
     };
     watchFile(usagePath, { interval: 2000 }, refresh);
@@ -79,8 +83,10 @@ function registerSavings(context) {
             }
             const toPick = (label, row) => ({
                 label,
-                description: `${savedPercent(row)}% saved`,
-                detail: `${row.calls} calls: read ${formatBytes(row.sourceBytes)}, returned ${formatBytes(row.responseBytes)}`
+                description: row.sourceBytes > 0 ? `${savedPercent(row)}% saved` : 'Savings not measured',
+                detail: row.sourceBytes > 0
+                    ? `${row.calls} calls; measured: read ${formatBytes(row.sourceBytes)}, returned ${formatBytes(row.responseBytes)}`
+                    : `${row.calls} calls`
             });
             await vscode.window.showQuickPick(
                 [toPick('Total', summary.total), ...summary.rows.map(row => toPick(row.tool, row))],

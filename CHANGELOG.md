@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- Count `execute_powershell`, `search_files`, session resets, trace inspection, and diagnostic calls without a measurable source size. Exclude these calls from the savings percentage and show the total call count in the status bar.
+
 ## 0.7.0
 
 - `peek_file` returns each outline entry as one string, `"start-end level title"`, instead of an object with `start`, `end`, `level`, and `title`. This is a behavior change.

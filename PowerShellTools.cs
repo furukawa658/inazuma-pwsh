@@ -33,8 +33,8 @@ public sealed class PowerShellTools
         bool compactResponse = true,
         CancellationToken cancellationToken = default)
     {
-        return await _session.ExecuteAsync(script, workingDirectory, Math.Clamp(timeoutSeconds, 1, 300),
-            Math.Clamp(maxOutputChars, 1000, 50000), sessionId, compactResponse, cancellationToken);
+        return await UsageLog.TrackCallAsync("execute_powershell", _session.ExecuteAsync(script, workingDirectory, Math.Clamp(timeoutSeconds, 1, 300),
+            Math.Clamp(maxOutputChars, 1000, 50000), sessionId, compactResponse, cancellationToken));
     }
 
     [McpServerTool(Name = "reset_powershell_session")]
@@ -43,6 +43,6 @@ public sealed class PowerShellTools
         [Description("Session ID to reset. If omitted, only the default session is reset. Environment variables are not reset.")]
         string? sessionId = null, CancellationToken cancellationToken = default)
     {
-        return await _session.ResetAsync(sessionId, cancellationToken);
+        return await UsageLog.TrackCallAsync("reset_powershell_session", _session.ResetAsync(sessionId, cancellationToken));
     }
 }
