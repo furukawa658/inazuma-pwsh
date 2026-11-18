@@ -15,9 +15,9 @@ internal static partial class TscReportParser
     private sealed record Diagnostic(string? File, int Line, int Column, string Code, string Message);
 
     /// <summary>Removes from raw compiler output the diagnostics that the report lists with their whole message.</summary>
-    public static string WithoutListed(string output, System.Text.Json.Nodes.JsonObject result, string workingDirectory)
+    public static string WithoutListed(string output, System.Text.Json.Nodes.JsonObject result, string workingDirectory, IReadOnlySet<string>? previous = null, bool compact = true)
     {
-        if (result["diagnostics"] is not System.Text.Json.Nodes.JsonArray array || array.Count == 0) return output;
+        if (result["diagnostics"] is not System.Text.Json.Nodes.JsonArray array) return output;
         static string Key(string? file, int line, int column, string? code, string? message) => $"{file}|{line}|{column}|{code}|{message}";
         var listed = array.OfType<System.Text.Json.Nodes.JsonObject>().Select(item => Key(item["file"]?.GetValue<string>(),
             item["line"]?.GetValue<int>() ?? 0, item["column"]?.GetValue<int>() ?? 0, item["code"]?.GetValue<string>(), item["message"]?.GetValue<string>())).ToHashSet();
@@ -46,7 +46,8 @@ internal static partial class TscReportParser
         }
         // A truncated path or message does not equal the listed one, so its lines stay.
         bool IsListed(Diagnostic d) => listed.Contains(Key(d.File == null ? null : PlaywrightResultParser.ToRelativePath(d.File, workingDirectory), d.Line, d.Column, d.Code, d.Message));
-        var remaining = string.Join('\n', lines.Where((_, index) => owner[index] < 0 || !IsListed(found[owner[index]])));
+        var remaining = string.Join('\n', lines.Where((_, index) => owner[index] < 0 ||
+            (!(previous?.Contains(BaselineKey(found[owner[index]])) ?? false) && (!compact || !IsListed(found[owner[index]])))));
         return string.IsNullOrWhiteSpace(remaining) ? "" : remaining;
     }
 
@@ -80,10 +81,9 @@ internal static partial class TscReportParser
             : truncatedLog || exitCode != 0 ? (exitCode == 0 ? "report_unavailable" : "error")
             : "success";
         // Line numbers are left out of the key because edits above a diagnostic shift them.
-        static string Key(Diagnostic d) => $"{d.File}|{d.Code}|{d.Message}";
-        var keys = truncatedLog ? null : diagnostics.Select(Key).ToHashSet();
+        var keys = truncatedLog ? null : diagnostics.Select(BaselineKey).ToHashSet();
         current = keys;
-        var listed = previous == null ? diagnostics : diagnostics.Where(d => !previous.Contains(Key(d))).ToList();
+        var listed = previous == null ? diagnostics : diagnostics.Where(d => !previous.Contains(BaselineKey(d))).ToList();
         var shown = listed.Take(MaxDiagnostics).Select(d => new
         {
             file = d.File == null ? null : PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(d.File, workingDirectory), 300),
@@ -104,4 +104,6 @@ internal static partial class TscReportParser
             omitted = Math.Max(0, listed.Count - MaxDiagnostics)
         }, JsonDefaults.OptionsIgnoreNull);
     }
+
+    private static string BaselineKey(Diagnostic diagnostic) => $"{diagnostic.File}|{diagnostic.Code}|{diagnostic.Message}";
 }

@@ -11,7 +11,7 @@ internal static class CodeContext
     private const int MaxLineChars = 160;
     private const long MaxFileBytes = 2L * 1024 * 1024;
     private static readonly string[] ExcludedSegments = ["node_modules", ".venv", "site-packages"];
-    private static readonly string[] ItemArrays = ["failures", "diagnostics", "errors"];
+    private static readonly string[] ItemArrays = ["failures", "diagnostics", "errors", "warnings"];
 
     public static string Add(string report, string workingDirectory, int contextLines)
     {

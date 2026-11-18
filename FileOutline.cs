@@ -49,7 +49,10 @@ internal static partial class FileOutline
     private static readonly Regex CodeMethodRegex = new(
         @"^(public|private|protected|internal|static|async|override|virtual|sealed|abstract|\s)+[\w<>\[\],\s?]+\s+\w+\s*\(", RegexOptions.Compiled);
 
-    private static readonly Regex CodePythonDefRegex = new(@"^def\s+\w+", RegexOptions.Compiled);
+    private static readonly Regex CodeExpressionPropertyRegex = new(
+        @"^(public|private|protected|internal|static|override|virtual|sealed|abstract|\s)+[\w<>\[\],\s?]+\s+\w+\s*=>", RegexOptions.Compiled);
+
+    private static readonly Regex CodePythonDefRegex = new(@"^(async\s+)?def\s+\w+", RegexOptions.Compiled);
 
     private static readonly Regex CodeClassRegex = new(@"^class\s+\w+", RegexOptions.Compiled);
 
@@ -152,7 +155,7 @@ internal static partial class FileOutline
             "markdown" => OutlineMarkdown(lines),
             "code" when Path.GetExtension(path).Equals(".ps1", StringComparison.OrdinalIgnoreCase) ||
                         Path.GetExtension(path).Equals(".psm1", StringComparison.OrdinalIgnoreCase) => OutlinePowerShell(lines),
-            "code" => OutlineCode(lines),
+            "code" => OutlineCode(lines, Path.GetExtension(path).Equals(".py", StringComparison.OrdinalIgnoreCase)),
             "json" => OutlineJson(lines),
             "yaml" => OutlineYaml(lines),
             _ => OutlineText(lines)
@@ -287,15 +290,52 @@ internal static partial class FileOutline
         }
     }
 
-    private static List<OutlineEntry> OutlineCode(string[] lines)
+    private static List<OutlineEntry> OutlineCode(string[] lines, bool isPython)
     {
         var entries = new List<OutlineEntry>();
+        int? decoratorStart = null;
+        int decoratorIndent = -1;
+        int decoratorDepth = 0;
 
         for (int i = 0; i < lines.Length; i++)
         {
             int lineNum = i + 1;
             string line = lines[i];
             string trimmed = line.Trim();
+
+            int width = 0;
+            foreach (char c in line)
+            {
+                if (c == ' ') width += 1;
+                else if (c == '\t') width += 4;
+                else break;
+            }
+
+            if (isPython && (decoratorDepth > 0 || trimmed.StartsWith('@')))
+            {
+                if (decoratorDepth == 0)
+                {
+                    if (decoratorStart == null || width != decoratorIndent) decoratorStart = lineNum;
+                    decoratorIndent = width;
+                }
+                char quote = '\0';
+                bool escaped = false;
+                foreach (char c in trimmed)
+                {
+                    if (quote != '\0')
+                    {
+                        if (escaped) escaped = false;
+                        else if (c == '\\') escaped = true;
+                        else if (c == quote) quote = '\0';
+                        continue;
+                    }
+                    if (c == '#') break;
+                    if (c is '\'' or '"') { quote = c; continue; }
+                    if (c is '(' or '[' or '{') decoratorDepth++;
+                    else if (c is ')' or ']' or '}') decoratorDepth = Math.Max(0, decoratorDepth - 1);
+                }
+                continue;
+            }
 
             if (string.IsNullOrWhiteSpace(trimmed)) continue;
             if (trimmed.StartsWith("//") || trimmed.StartsWith("'")) continue;
@@ -304,7 +344,8 @@ internal static partial class FileOutline
             bool isMatch = false;
             if (CodeTypeRegex.IsMatch(trimmed)) isMatch = true;
             else if (CodeFunctionRegex.IsMatch(trimmed)) isMatch = true;
-            else if (CodeMethodRegex.IsMatch(trimmed) && !trimmed.EndsWith(';')) isMatch = true;
+            else if (CodeMethodRegex.IsMatch(trimmed) && (!trimmed.EndsWith(';') || trimmed.Contains("=>"))) isMatch = true;
+            else if (CodeExpressionPropertyRegex.IsMatch(trimmed)) isMatch = true;
             else if (CodePythonDefRegex.IsMatch(trimmed)) isMatch = true;
             else if (CodeClassRegex.IsMatch(trimmed)) isMatch = true;
             else if (CodeGoFuncRegex.IsMatch(trimmed)) isMatch = true;
@@ -314,18 +355,13 @@ internal static partial class FileOutline
 
             if (isMatch)
             {
-                int width = 0;
-                foreach (char c in line)
-                {
-                    if (c == ' ') width += 1;
-                    else if (c == '\t') width += 4;
-                    else break;
-                }
-
                 int level = (width / 4) + 1;
                 string title = trimmed.Length <= 120 ? trimmed : trimmed[..120];
-                entries.Add(new OutlineEntry(lineNum, lineNum, level, title));
+                int start = isPython && width == decoratorIndent && (CodePythonDefRegex.IsMatch(trimmed) || CodeClassRegex.IsMatch(trimmed))
+                    ? decoratorStart ?? lineNum : lineNum;
+                entries.Add(new OutlineEntry(start, lineNum, level, title));
             }
+            if (isPython) { decoratorStart = null; decoratorIndent = -1; }
         }
 
         ComputeHierarchicalEnds(entries, lines.Length);

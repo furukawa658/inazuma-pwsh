@@ -23,7 +23,7 @@ public sealed class PowerShellTools
         string script,
         [Description("Timeout in seconds (default: 60).")]
         int timeoutSeconds = 60,
-        [Description("Absolute working directory for this call. If omitted, the session's current location is used.")]
+        [Description("Absolute working directory for this call; it remains the session's location afterwards. If omitted, the session's current location is used.")]
         string? workingDirectory = null,
         [Description("Maximum output text length in characters: 1000 to 50000, default 6000. The full log is saved to fullLogPath when truncated.")]
         int maxOutputChars = 6000,
@@ -45,4 +45,8 @@ public sealed class PowerShellTools
     {
         return await UsageLog.TrackCallAsync("reset_powershell_session", _session.ResetAsync(sessionId, cancellationToken));
     }
+
+    [McpServerTool(Name = "list_powershell_sessions")]
+    [Description("List existing PowerShell sessions with their current location, creation time, last-used time and busy state.")]
+    public string ListPowerShellSessions() => _session.ListSessions();
 }

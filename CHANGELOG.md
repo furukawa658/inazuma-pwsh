@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.7.2
+
+### PowerShell sessions
+
+- `execute_powershell` returns `status: "error"` with the message for terminating errors (`throw`, `$ErrorActionPreference = 'Stop'`) and keeps the output produced before the error. Earlier versions reported success with empty output.
+- New sessions start in the first workspace folder, or in the home directory when no folder is open, instead of the extension's install directory. The location persists between calls: `Set-Location` in a script and `workingDirectory` both remain in effect for the next call in the same session. This is a behavior change.
+- The limit of 6 sessions is enforced: the least recently used idle session is closed, and an error is returned when all sessions are busy.
+- New `list_powershell_sessions` tool. `reset_powershell_session` returns `existed: false` for an unknown session.
+- `Write-Host` and `Write-Information` output is returned with the normal output. Verbose and debug messages are returned in `warnings` with a `VERBOSE:` or `DEBUG:` prefix.
+- The log at `fullLogPath` has one output line per line.
+
+### Test and build tools
+
+- With `compactResponse` (default `true`), all test tools remove from `output` the failure blocks, progress lines and tool-internal lines already covered by `failures`, and keep summaries and errors outside tests.
+- `run_tsc` with `onlyNew` leaves out compiler lines for diagnostics that are not new.
+- `run_dotnet_test` returns `rerunArgs` with a `--filter` for the failed tests, drops framework frames from stacks, keeps truncated lines in order, and no longer copies failed tests into `globalErrors`.
+- `run_pytest` reports unexpected exceptions as `status: "error"` and counts them in `stats.errors`, separately from assertion failures.
+- `run_dotnet_build` reports MSBuild errors without a file (for example MSB1009), adds `codeContext` to warnings, and counts info-level diagnostics in `totalInfos` instead of warnings.
+- `run_playwright` returns absolute attachment paths. `run_bun_test` reports a `-t` filter that matches no tests as an error. `run_vitest` returns Vitest's summary in `output`.
+- `inspect_playwright_trace` accepts a relative `tracePath` with `workingDirectory`, strips ANSI codes, returns `stack` as an array of frames, no longer repeats the test failure in `uncaughtErrors`, and puts "Trace file not found" in `errors`.
+
+### File-reading tools
+
+- `peek_file` lists C# expression-bodied members, starts Python ranges at the first decorator, and accepts `maxLevel`.
+- `read_section` rejects a start line after the end line, suggests the closest headings and body matches when nothing matches, and reads up to 10 `ranges` in one call.
+- `search_files` adds `maxPerFile`, `literal`, `contextLines` and `exclude`, respects `.gitignore`, and keeps leading indentation.
+- `summarize_log` also matches エラー, 警告, 失敗 and 例外, and ignores zero-count summary lines.
+
 ## 0.7.1
 
 - Count `execute_powershell`, `search_files`, session resets, trace inspection, and diagnostic calls without a measurable source size. Exclude these calls from the savings percentage and show the total call count in the status bar.
