@@ -450,6 +450,12 @@ public sealed class FileReadingTools
         bool caseSensitive = false,
         CancellationToken cancellationToken = default)
     {
+        return UsageLog.TrackCallAsync("search_files", SearchFilesCoreAsync(path, pattern, fileName, maxResults, caseSensitive, cancellationToken));
+    }
+
+    private static Task<string> SearchFilesCoreAsync(string path, string pattern, string? fileName, int maxResults,
+        bool caseSensitive, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) || (!Directory.Exists(path) && !File.Exists(path)))
             return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = "Path must be an existing absolute directory or file path." }));
         Regex regex;

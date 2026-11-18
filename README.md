@@ -95,8 +95,8 @@ This release changes response formats to reduce repeated output:
 
 The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it, or run **Zuma MCP: Show Savings**, for the breakdown by tool: number of calls, bytes read, and bytes returned.
 
-- The diagnostic tools, `peek_file`, `read_section`, and `summarize_log` append the bytes they read (the file, or the full log of a run) and the bytes they returned to `%TEMP%/inazuma-pwsh-logs/usage.jsonl`. The status bar item totals that file and appears after the first recorded call.
-- The percentage compares, for each call, the size of what the tool read with the size of its response. It is not a token count and not a whole-chat measurement. `execute_powershell` and `search_files` are not recorded.
+- The status bar shows recorded calls and the savings measured for diagnostic tools, `peek_file`, `read_section`, and `summarize_log`. The records are stored in `%TEMP%/inazuma-pwsh-logs/usage.jsonl`.
+- Calls without a comparable source size, including `execute_powershell` and `search_files`, are counted but excluded from the savings percentage. The percentage is not a token count or a whole-chat measurement.
 - The numbers in the animation were measured with 0.6.0 on this repository: a 44 KB C# file (`peek_file`, `read_section`) and a 170 KB build log (`summarize_log`). The animation is an illustration, not a screen recording.
 
 #### New tools and options
