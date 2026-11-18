@@ -9,7 +9,7 @@ namespace InazumaPwsh;
 [McpServerToolType]
 public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
 {
-    private const string ContextLinesText = "Number of source lines (0 to 10) shown before and after each failure location as codeContext. 0 omits it.";
+    private const string ContextLinesText = "Number of source lines (0 to 10) shown before and after each failure location as codeContext. 0 omits it. A line already shown for an earlier item of the same file is not repeated.";
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> TscBaselines = new();
 
     [McpServerTool(Name = "run_dotnet_build")]
@@ -135,7 +135,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         }, cancellationToken);
 
     [McpServerTool(Name = "run_tsc")]
-    [Description("Run a locally installed TypeScript compiler with --noEmit and return error counts, error-code counts and the first 15 diagnostics. Passing --build or -b in tscArgs builds project references and omits --noEmit. tscPath overrides the compiler found in node_modules/typescript. Dependencies are not installed automatically.")]
+    [Description("Run a locally installed TypeScript compiler with --noEmit and return error counts, error-code counts and the first 15 diagnostics. output leaves out the compiler lines that diagnostics already lists in full. Passing --build or -b in tscArgs builds project references and omits --noEmit. tscPath overrides the compiler found in node_modules/typescript. Dependencies are not installed automatically.")]
     public Task<string> RunTscAsync(string workingDirectory,
         [Description("Arguments passed to tsc, with each argument as a separate array element, for example -p tsconfig.app.json.") ] string[]? tscArgs = null,
         [Description("Optional absolute path to tsc.js.") ] string? tscPath = null,
@@ -168,7 +168,8 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
                 if (TscBaselines.Count >= 20 && !TscBaselines.ContainsKey(baselineKey)) TscBaselines.Clear();
                 TscBaselines[baselineKey] = current;
             }
-            return await CombineAsync("run_tsc", report, execution, workingDirectory, contextLines);
+            return await CombineAsync("run_tsc", report, execution, workingDirectory, contextLines,
+                trimOutput: (output, result) => TscReportParser.WithoutListed(output, result, workingDirectory));
         }, cancellationToken);
 
     [McpServerTool(Name = "run_eslint")]
@@ -298,9 +299,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     }
 
     private static async Task<string> CombineAsync(string tool, string report, NativeProcessRunner.Result execution, string workingDirectory,
-        int contextLines, Func<JsonObject, string[]?>? rerun = null)
+        int contextLines, Func<JsonObject, string[]?>? rerun = null, Func<string, JsonObject, string>? trimOutput = null)
     {
-        var json = await CombineAsync(report, execution, workingDirectory, contextLines, rerun);
+        var json = await CombineAsync(report, execution, workingDirectory, contextLines, rerun, trimOutput);
         long sourceBytes = 0;
         try { sourceBytes = new FileInfo(execution.FullLogPath).Length; } catch (IOException) { }
         UsageLog.Record(tool, sourceBytes, json);
@@ -308,7 +309,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     }
 
     private static async Task<string> CombineAsync(string report, NativeProcessRunner.Result execution, string workingDirectory, int contextLines,
-        Func<JsonObject, string[]?>? rerun)
+        Func<JsonObject, string[]?>? rerun, Func<string, JsonObject, string>? trimOutput)
     {
         report = CodeContext.Add(report, workingDirectory, contextLines);
         var result = JsonNode.Parse(report)!.AsObject();
@@ -319,7 +320,8 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         {
             if (rerun?.Invoke(result) is { Length: > 0 } rerunArgs)
                 result["rerunArgs"] = new JsonArray(rerunArgs.Select(argument => (JsonNode?)JsonValue.Create(argument)).ToArray());
-            result["output"] = (await OutputCompressor.CompressAsync(execution.Tail, 1500)).Content;
+            var tail = trimOutput == null ? execution.Tail : trimOutput(execution.Tail, result);
+            result["output"] = (await OutputCompressor.CompressAsync(tail, 1500)).Content;
         }
 
         var json = result.ToJsonString(JsonDefaults.Options);

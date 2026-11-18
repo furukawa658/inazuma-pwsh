@@ -22,13 +22,14 @@ internal static class CodeContext
             if (JsonNode.Parse(report) is not JsonObject root) return report;
             var remaining = TotalBudget;
             var realRoot = RealPath(workingDirectory);
+            var shown = new Dictionary<string, HashSet<int>>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
             foreach (var name in ItemArrays)
             {
                 if (root[name] is not JsonArray items) continue;
                 foreach (var item in items.OfType<JsonObject>())
                 {
                     if (remaining <= 0) break;
-                    var context = Read(item, workingDirectory, realRoot, radius, remaining);
+                    var context = Read(item, workingDirectory, realRoot, radius, remaining, shown);
                     if (context == null) continue;
                     item["codeContext"] = context;
                     remaining -= context.Length;
@@ -58,7 +59,8 @@ internal static class CodeContext
         return current;
     }
 
-    private static string? Read(JsonObject item, string workingDirectory, string realRoot, int radius, int budget)
+    // A line already returned for an earlier item of the same file is skipped, except the item's own line.
+    private static string? Read(JsonObject item, string workingDirectory, string realRoot, int radius, int budget, Dictionary<string, HashSet<int>> shown)
     {
         var file = (item["file"] ?? item["path"])?.GetValue<string>();
         var line = item["line"]?.GetValue<int>() ?? 0;
@@ -76,14 +78,17 @@ internal static class CodeContext
         var first = Math.Max(1, line - radius);
         var last = Math.Min(lines.Length, line + radius);
         var width = last.ToString().Length;
+        if (!shown.TryGetValue(relative, out var seen)) shown[relative] = seen = [];
         var builder = new StringBuilder();
         for (var number = first; number <= last; number++)
         {
+            if (number != line && seen.Contains(number)) continue;
             var text = lines[number - 1].TrimEnd();
             if (text.Length > MaxLineChars) text = text[..MaxLineChars] + "...";
             var entry = $"{(number == line ? '>' : ' ')}{number.ToString().PadLeft(width)}| {text}\n";
             if (builder.Length + entry.Length > budget) break;
             builder.Append(entry);
+            seen.Add(number);
         }
         return builder.Length == 0 ? null : builder.ToString().TrimEnd('\n');
     }
