@@ -14,6 +14,42 @@ internal static partial class TscReportParser
 
     private sealed record Diagnostic(string? File, int Line, int Column, string Code, string Message);
 
+    /// <summary>Removes from raw compiler output the diagnostics that the report lists with their whole message.</summary>
+    public static string WithoutListed(string output, System.Text.Json.Nodes.JsonObject result, string workingDirectory)
+    {
+        if (result["diagnostics"] is not System.Text.Json.Nodes.JsonArray array || array.Count == 0) return output;
+        static string Key(string? file, int line, int column, string? code, string? message) => $"{file}|{line}|{column}|{code}|{message}";
+        var listed = array.OfType<System.Text.Json.Nodes.JsonObject>().Select(item => Key(item["file"]?.GetValue<string>(),
+            item["line"]?.GetValue<int>() ?? 0, item["column"]?.GetValue<int>() ?? 0, item["code"]?.GetValue<string>(), item["message"]?.GetValue<string>())).ToHashSet();
+
+        var lines = output.Split('\n');
+        var owner = new int[lines.Length];
+        var found = new List<Diagnostic>();
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var text = FileOutline.StripAnsi(lines[index]).TrimEnd();
+            var match = DiagnosticRegex().Match(text);
+            owner[index] = -1;
+            if (match.Success)
+            {
+                owner[index] = found.Count;
+                found.Add(new Diagnostic(match.Groups["file"].Success ? match.Groups["file"].Value : null,
+                    match.Groups["line"].Success ? int.Parse(match.Groups["line"].Value) : 0,
+                    match.Groups["col"].Success ? int.Parse(match.Groups["col"].Value) : 0,
+                    match.Groups["code"].Value, match.Groups["message"].Value));
+            }
+            else if (found.Count > 0 && text.Length > 0 && char.IsWhiteSpace(lines[index][0]))
+            {
+                owner[index] = found.Count - 1;
+                found[^1] = found[^1] with { Message = found[^1].Message + " " + text.Trim() };
+            }
+        }
+        // A truncated path or message does not equal the listed one, so its lines stay.
+        bool IsListed(Diagnostic d) => listed.Contains(Key(d.File == null ? null : PlaywrightResultParser.ToRelativePath(d.File, workingDirectory), d.Line, d.Column, d.Code, d.Message));
+        var remaining = string.Join('\n', lines.Where((_, index) => owner[index] < 0 || !IsListed(found[owner[index]])));
+        return string.IsNullOrWhiteSpace(remaining) ? "" : remaining;
+    }
+
     /// <summary>When previous is given, only diagnostics absent from it are listed.</summary>
     public static string Parse(string logPath, string workingDirectory, int exitCode, IReadOnlySet<string>? previous, out HashSet<string>? current)
     {

@@ -75,6 +75,14 @@ const literal = value => `'${value.replaceAll("'", "''")}'`;
 async function tool(name, args) {
     return result(await request('tools/call', { name, arguments: args }).response);
 }
+// peek_file returns each entry as "start-end level title".
+function outline(peeked) {
+    return peeked.entries.map(entry => {
+        const match = /^(\d+)-(\d+) (\d+) (.*)$/s.exec(entry);
+        assert.ok(match, `unexpected entry: ${entry}`);
+        return { start: Number(match[1]), end: Number(match[2]), level: Number(match[3]), title: match[4] };
+    });
+}
 const startedAt = performance.now();
 let passed = 0;
 async function check(name, run) {
@@ -130,8 +138,8 @@ try {
         await writeFile(docPath, ['# First', '````markdown', '```', '# Hidden', '````', '## Second',
             '~~~', '~~~not-a-close', '# Also hidden', '~~~', '## Third'].join('\n'));
         const result = await tool('peek_file', { path: docPath });
-        assert.deepEqual(result.entries.map(entry => entry.title), ['First', 'Second', 'Third']);
-        assert.equal(result.entries[1].end, 10);
+        assert.deepEqual(outline(result).map(entry => entry.title), ['First', 'Second', 'Third']);
+        assert.equal(outline(result)[1].end, 10);
     });
     await check('outline regression parses PowerShell declarations and ranges', async () => {
         const scriptPath = path.join(fixture, 'script.ps1');
@@ -140,9 +148,10 @@ try {
             'function Inner {', "  '}'", '}', '}', "function After { 'ok' }"
         ].join('\n'));
         const result = await tool('peek_file', { path: scriptPath });
-        assert.deepEqual(result.entries.map(entry => [entry.title, entry.start, entry.end, entry.level]), [
+        assert.deepEqual(outline(result).map(entry => [entry.title, entry.start, entry.end, entry.level]), [
             ['function Outer {', 1, 11, 1], ['function Inner {', 8, 10, 2], ["function After { 'ok' }", 12, 12, 1]
         ]);
+        assert.deepEqual(result.entries, ['1-11 1 function Outer {', '8-10 2 function Inner {', "12-12 1 function After { 'ok' }"]);
         const section = await tool('read_section', { path: scriptPath, query: 'Outer' });
         assert.equal(section.endLine, 11);
     });
@@ -152,7 +161,7 @@ try {
         await writeFile(scriptPath, [`Set-Content -Path ${literal(markerPath)} -Value 'executed'`,
             'class Widget {', '    [void] Run() {', '    }', '}'].join('\n'));
         const result = await tool('peek_file', { path: scriptPath });
-        assert.deepEqual(result.entries.map(entry => [entry.start, entry.end, entry.level]), [[2, 5, 1], [3, 4, 2]]);
+        assert.deepEqual(outline(result).map(entry => [entry.start, entry.end, entry.level]), [[2, 5, 1], [3, 4, 2]]);
         await assert.rejects(stat(markerPath), { code: 'ENOENT' });
     });
     await check('peek_file outlines markdown and recommends partial reads', async () => {
@@ -178,10 +187,16 @@ try {
         assert.equal(result.kind, 'markdown');
         assert.equal(result.recommend, 'PARTIAL');
         assert.equal(result.entries.length, 30);
-        assert.equal(result.entries[0].title, 'Section 1');
-        assert.equal(result.entries[0].start, 1);
-        assert.equal(result.entries[0].end, 11);
-        assert.ok(!result.entries.some(e => e.title.includes('not a heading')));
+        assert.equal(outline(result)[0].title, 'Section 1');
+        assert.equal(outline(result)[0].start, 1);
+        assert.equal(outline(result)[0].end, 11);
+        assert.ok(!outline(result).some(e => e.title.includes('not a heading')));
+        // The string form is shorter than the former object form even for a single entry.
+        const single = path.join(fixture, 'single.md');
+        await writeFile(single, '# Only\nbody\n');
+        const one = await tool('peek_file', { path: single });
+        assert.deepEqual(one.entries, ['1-2 1 Only']);
+        assert.ok(JSON.stringify(one.entries).length <= JSON.stringify(outline(one)).length);
 
         const ratio = JSON.stringify(result).length / mdContent.length;
         console.log(`PEEK_RATIO ${ratio.toFixed(3)}`);
@@ -225,7 +240,7 @@ try {
         await writeFile(csPath, csCode);
 
         const csResult = await tool('peek_file', { path: csPath });
-        const titles = csResult.entries.map(e => e.title);
+        const titles = outline(csResult).map(e => e.title);
         assert.ok(titles.some(t => t.includes('SampleClass')));
         assert.ok(titles.some(t => t.includes('MethodOne')));
         assert.ok(titles.some(t => t.includes('MethodTwo')));
@@ -276,6 +291,16 @@ try {
         assert.equal(logResult.groups[0].firstLine, firstErrorLine);
         assert.ok(logResult.groups.some(g => g.text.includes('FATAL') && g.count === 1));
         assert.ok(logResult.tail[logResult.tail.length - 1].endsWith('done'));
+        // The matched line is returned once (text); context holds only the lines around it.
+        for (const group of logResult.groups) {
+            const matched = `${group.firstLine}: ${group.text}`;
+            assert.ok(!group.context.includes(matched), JSON.stringify(group));
+            const restored = [...group.context, matched].sort((left, right) => parseInt(left) - parseInt(right));
+            const first = Math.max(1, group.firstLine - 1);
+            assert.deepEqual(restored, lines.slice(first - 1, Math.min(500, group.firstLine + 1)).map((line, offset) => `${first + offset}: ${line}`));
+        }
+        const noContext = await tool('summarize_log', { path: logPath, contextLines: 0 });
+        assert.deepEqual(noContext.groups.map(group => group.context), logResult.groups.map(() => []));
         const jsonLength = JSON.stringify(logResult).length;
         assert.ok(jsonLength < 4000, `Expected JSON length < 4000, got ${jsonLength}`);
 
@@ -671,6 +696,31 @@ process.exitCode = 1;
         assert.ok(wide.failures[0].codeContext.length <= 2400);
         assert.equal(wide.failures.at(-1).codeContext, undefined);
         assert.ok(wide.failures.every(failure => failure.file && failure.line === 11), JSON.stringify(wide));
+
+        // Lines already returned for an earlier failure of the same file are not repeated.
+        const nearPath = path.join(project, 'near.ts');
+        const otherPath = path.join(project, 'other.ts');
+        const nearSource = Array.from({ length: 20 }, (_, index) => `near${index + 1}`);
+        await writeFile(nearPath, nearSource.join('\n'));
+        await writeFile(otherPath, nearSource.join('\n'));
+        const near = await run([[nearPath, 10], [nearPath, 11], [otherPath, 11], [nearPath, 16]], 2);
+        assert.deepEqual(near.failures.map(failure => failure.codeContext), [
+            '  8| near8\n  9| near9\n>10| near10\n 11| near11\n 12| near12',
+            '>11| near11\n 13| near13',
+            '  9| near9\n 10| near10\n>11| near11\n 12| near12\n 13| near13',
+            ' 14| near14\n 15| near15\n>16| near16\n 17| near17\n 18| near18'
+        ]);
+        // Every former window can be rebuilt from the lines returned so far for the same file.
+        const returned = new Map();
+        for (const failure of near.failures) {
+            const known = returned.get(failure.file) ?? new Map();
+            returned.set(failure.file, known);
+            for (const entry of failure.codeContext.split('\n')) known.set(Number(entry.slice(1).split('|')[0]), entry.slice(entry.indexOf('| ') + 2));
+            assert.ok(failure.codeContext.split('\n').some(entry => entry.startsWith(`>${failure.line}| `)));
+            for (let number = failure.line - 2; number <= failure.line + 2; number++) assert.equal(known.get(number), nearSource[number - 1], `${failure.file}:${number}`);
+        }
+        const alone = await run([[nearPath, 10]], 2);
+        assert.equal(alone.failures[0].codeContext, near.failures[0].codeContext);
     });
     await check('run_tsc parses diagnostics, counts and rejects managed arguments', async () => {
         const project = path.join(fixture, 'tsc');
@@ -707,7 +757,25 @@ process.exitCode = 1;
         assert.equal(noConfig.status, 'error');
         assert.equal(noConfig.diagnostics[0].code, 'TS5057');
         assert.equal(noConfig.diagnostics[0].file, undefined);
+        assert.equal(noConfig.output, '');
         await rm(noConfig.fullLogPath);
+
+        // output keeps only what diagnostics does not already list in full.
+        const raw = [
+            'src/a.ts(3,5): error TS2322: Type A.',
+            "  Type 'string' is not assignable.",
+            `src/b.ts(7,1): error TS2304: Long ${'z'.repeat(400)}`,
+            'error TS6053: File not found.',
+            'src/a.ts(9,2): error TS2345: Argument B.',
+            'Some trailing note'
+        ];
+        await writeFile(mock, script(`console.log(${JSON.stringify(raw.join('\n'))}); process.exitCode = 2;`));
+        const trimmed = await tool('run_tsc', { workingDirectory: project });
+        assert.equal(trimmed.errorCount, 4);
+        assert.deepEqual(trimmed.output.trim().split(/\r?\n/), [raw[2], 'Some trailing note']);
+        const rebuilt = trimmed.diagnostics.map(item => `${item.file ? `${item.file}(${item.line},${item.column}): ` : ''}error ${item.code}: ${item.message}`);
+        assert.deepEqual(rebuilt, [`${raw[0]} ${raw[1].trim()}`, `${raw[2].slice(0, raw[2].indexOf('Long') + 320)}...`, raw[3], raw[4]]);
+        await rm(trimmed.fullLogPath);
 
         await writeFile(mock, script("console.log('internal crash'); process.exitCode = 1;"));
         const crash = await tool('run_tsc', { workingDirectory: project });

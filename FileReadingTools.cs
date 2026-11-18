@@ -28,7 +28,7 @@ public sealed class FileReadingTools
     }
 
     [McpServerTool(Name = "peek_file")]
-    [Description("Return a compact outline of a text file: line count, kind, and line ranges of headings, declarations or top-level keys. Use it before reading a large file, then read only the needed range with read_section. If recommend is FULL the file is small enough to read entirely.")]
+    [Description("Return a compact outline of a text file: line count, kind, and line ranges of headings, declarations or top-level keys. Each entry is \"start-end level title\". Use it before reading a large file, then read only the needed range with read_section. If recommend is FULL the file is small enough to read entirely.")]
     public Task<string> PeekFileAsync(
         [Description("Absolute path to the text file.")] string path,
         [Description("Maximum line count for recommending full read (1 to 5000, default 200).")] int fullThreshold = 200,
@@ -52,7 +52,7 @@ public sealed class FileReadingTools
 
             string recommend = lines.Length <= clampedThreshold ? "FULL" : "PARTIAL";
             bool entriesTruncated = allEntries.Count > clampedMaxEntries;
-            var entries = allEntries.Take(clampedMaxEntries).ToList();
+            var entries = allEntries.Take(clampedMaxEntries).Select(entry => $"{entry.Start}-{entry.End} {entry.Level} {entry.Title}").ToList();
 
             var result = new
             {
@@ -268,7 +268,7 @@ public sealed class FileReadingTools
     }
 
     [McpServerTool(Name = "summarize_log")]
-    [Description("Summarize a large log without reading all of it: lines matching pattern (case-insensitive regex) grouped by text with digits normalized, with occurrence counts, first and last line numbers and context, plus the last lines of the file. Use it for build logs and fullLogPath files.")]
+    [Description("Summarize a large log without reading all of it: lines matching pattern (case-insensitive regex) grouped by text with digits normalized, with occurrence counts, first and last line numbers and the lines around the first occurrence (context; the matched line itself is only in text), plus the last lines of the file. Use it for build logs and fullLogPath files.")]
     public Task<string> SummarizeLogAsync(
         [Description("Absolute path to the log file.")] string path,
         [Description("Regex pattern to match error lines (default 'error|fail|exception|fatal|warn').")] string pattern = "error|fail|exception|fatal|warn",
@@ -347,6 +347,7 @@ public sealed class FileReadingTools
                         int cEnd = Math.Min(totalLines, lineNum + clampedContextLines);
                         for (int ci = cStart; ci <= cEnd; ci++)
                         {
+                            if (ci == lineNum) continue;
                             string cLine = FileOutline.StripAnsi(lines[ci - 1]).Trim();
                             if (cLine.Length > 300) cLine = cLine[..300];
                             grp.Context.Add($"{ci}: {cLine}");

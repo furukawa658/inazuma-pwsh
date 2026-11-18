@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `peek_file` returns each outline entry as one string, `"start-end level title"`, instead of an object with `start`, `end`, `level`, and `title`. This is a behavior change.
+- `summarize_log` no longer repeats the matched line inside `context`; it is returned once as `text` at `firstLine`. This is a behavior change.
+- With `contextLines`, `codeContext` skips lines already returned for an earlier item of the same file (the item's own line is kept), and the `output` of `run_tsc` leaves out compiler lines that `diagnostics` lists with their whole message. This is a behavior change.
+
 ## 0.6.1
 
 - The MCP server is shown as `Zuma` in VS Code.
