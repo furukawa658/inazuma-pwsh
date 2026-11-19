@@ -19,7 +19,7 @@ function run(command, args, cwd) {
     console.log(`> ${command} ${args.join(' ')}`);
     let executable = command;
     let commandArgs = args;
-    if (command === 'npx') {
+    if (command === 'npx' && process.platform === 'win32') {
         executable = process.execPath;
         commandArgs = [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js'), ...args];
     }

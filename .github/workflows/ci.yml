@@ -8,7 +8,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - { os: windows-latest, target: win32-x64, executable: vscode-extension/server/win-x64/InazumaPwsh.exe }
+          - { os: ubuntu-latest, target: linux-x64, executable: vscode-extension/server/linux-x64/InazumaPwsh }
+          - { os: macos-latest, target: darwin-arm64, executable: vscode-extension/server/osx-arm64/InazumaPwsh }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +23,7 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.os == 'windows-latest'
-      - run: dotnet build -c Debug
-      - name: Build Windows Rust package
-        if: matrix.os == 'windows-latest'
-        run: node vscode-extension/build-target.mjs win32-x64
-      - name: Run Windows packaged real smoke test
-        if: matrix.os == 'windows-latest'
-        run: node rust/zuma-mcp/tests/real-smoke.mjs vscode-extension/server/win-x64/InazumaPwsh.exe
-      - name: Run .NET real smoke test
-        if: matrix.os != 'windows-latest'
-        run: node rust/zuma-mcp/tests/real-smoke.mjs
+      - name: Build packaged server
+        run: node vscode-extension/build-target.mjs ${{ matrix.target }}
+      - name: Run packaged real smoke test
+        run: node rust/zuma-mcp/tests/real-smoke.mjs ${{ matrix.executable }}

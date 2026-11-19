@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Fix Linux and macOS Marketplace packaging by invoking the PATH-provided `npx` without a shell while retaining direct npm CLI invocation on Windows.
+
 ## 0.8.0
 
 ### Windows x64
