@@ -18,5 +18,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.os == 'windows-latest'
       - run: dotnet build -c Debug
-      - run: node test-mcp.mjs
+      - name: Build Windows Rust package
+        if: matrix.os == 'windows-latest'
+        run: node vscode-extension/build-target.mjs win32-x64
+      - name: Run Windows packaged real smoke test
+        if: matrix.os == 'windows-latest'
+        run: node rust/zuma-mcp/tests/real-smoke.mjs vscode-extension/server/win-x64/InazumaPwsh.exe
+      - name: Run .NET real smoke test
+        if: matrix.os != 'windows-latest'
+        run: node rust/zuma-mcp/tests/real-smoke.mjs

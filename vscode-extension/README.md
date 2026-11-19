@@ -72,6 +72,10 @@ After installing the extension and approving its MCP tools, ask your agent to us
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
+## What's new in 0.8.0
+
+On Windows x64, the Marketplace package starts a 0.5 MiB Rust MCP front end. UTF-8 Markdown outlines and explicit line ranges run locally in Rust. The existing .NET server is included as a compatibility process and starts on demand for persistent PowerShell, diagnostics, search, encoding fallback, and other tool paths. All 16 tool names and responses remain available. The other four platform packages continue to use the .NET server in 0.8.0.
+
 ## What's new in 0.7.0
 
 This release changes response formats to reduce repeated output:
@@ -109,13 +113,13 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 - **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.
 - **`run_tsc` additions.** `onlyNew: true` lists only diagnostics that the previous run with the same `workingDirectory` and `tscArgs` did not have, with `newCount` and `fixedCount`; the previous result is kept in memory until the server stops. `--build` and `-b` are accepted and omit `--noEmit`.
 
-Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.7.0/CHANGELOG.md).
+Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/CHANGELOG.md).
 
 ## Requirements and installation
 
 - VS Code 1.101 or later. Windows x64 is the verified platform; Linux (x64, arm64) and macOS (x64, arm64) are supported but experimental (see "Notes").
 - External PowerShell 7 (`pwsh.exe` on Windows, `pwsh` on Linux/macOS) installed on the system (only PowerShell 7.7.0 has been verified in practice). The server searches `PATH` first, then the standard install locations (Windows: `%ProgramFiles%\PowerShell\7`, `%LOCALAPPDATA%\Microsoft\WindowsApps`, `%USERPROFILE%\.dotnet\tools`; Linux/macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/snap/bin`, `~/.dotnet/tools`), or you can specify an explicit executable path via the `inazumaPwsh.pwshPath` setting or `INAZUMA_PWSH_PATH` environment variable. An invalid explicit path fails immediately without fallback.
-- The extension bundles the server binary and the worker script (`powershell-worker.ps1`). The worker script runs under the external PowerShell 7 process to manage session runspaces.
+- The extension bundles the server binary, the Windows x64 C# compatibility server where applicable, and the worker script (`powershell-worker.ps1`). The worker script runs under the external PowerShell 7 process to manage session runspaces.
 - A trusted workspace. The extension runs in the local extension host, including when a remote workspace is open; it does not switch to the remote shell or filesystem.
 - Install the VSIX for your platform (win32-x64, linux-x64, linux-arm64, darwin-x64 or darwin-arm64) using **Extensions: Install from VSIX** or from the Visual Studio Code Marketplace. The extension registers its MCP server automatically; no `mcp.json` entry is required. Follow VS Code's prompts to trust the workspace, start the server, and approve tool calls.
 - Build diagnostics require the .NET SDK; Playwright diagnostics require Node.js and a locally installed Playwright package. `run_bun_test` requires Bun on `PATH`, `run_pytest` requires a Python interpreter with pytest installed, and `run_vitest` requires Node.js and a locally installed Vitest package.
@@ -126,7 +130,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 
 - Zuma MCP was formerly InazumaPwsh; the extension ID (`ShunsukeF.inazuma-pwsh`), setting keys (`inazumaPwsh.*`), environment variables, executable names, and the log folder keep their inazuma names for compatibility.
 - Linux and macOS are experimental. On Linux/macOS there is no Job Object, so workers may be orphaned if the server process crashes.
-- Details on sessions, output limits, cancellation, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.7.0/docs/reference.md).
+- Details on sessions, output limits, cancellation, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).
 
 ### Sessions and output
 
@@ -135,7 +139,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 - There are at most six sessions, including `default`. Idle sessions expire after 10 minutes.
 - `maxOutputChars` limits `output` to 1,000 through 50,000 characters, with a default of 6,000. When output is truncated, the full log is saved locally.
 
-Timeouts, `compactResponse`, Python standard input, and the limits of each diagnostic tool are described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.7.0/docs/reference.md).
+Timeouts, `compactResponse`, Python standard input, and the limits of each diagnostic tool are described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).
 
 ### Safety and logs
 
@@ -143,8 +147,8 @@ Scripts run with the current user's permissions. Zuma MCP is not a security sand
 
 Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` identifies an execution log; `fullReportPath`, when present, identifies detailed structured diagnostics. Logs older than 3 days, or beyond 200 MB in total, are deleted at server startup, and they may contain sensitive output. Review and remove them when no longer needed.
 
-Cancellation and timeout behavior is described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.7.0/docs/reference.md).
+Cancellation and timeout behavior is described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).
 
 ### Build and verification
 
-Build commands, reproducibility notes, and the limits of the test suite are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.7.0/docs/reference.md).
+Build commands, reproducibility notes, and the limits of the test suite are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).

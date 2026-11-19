@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+### Windows x64
+
+- The Marketplace package starts with a 0.3 MiB Rust MCP front end. UTF-8 Markdown outlines and line-range reads run in Rust without starting the .NET compatibility process.
+- The existing .NET server is bundled as `InazumaPwsh.core.exe` and starts on demand for persistent PowerShell sessions, diagnostics, searches, non-UTF-8 files, and the remaining tool paths.
+- Tool names and input contracts remain compatible with 0.7.2. Cancellation notifications are mapped from the Rust request ID to the compatibility process request ID.
+- Linux x64, Linux arm64, macOS x64 and macOS arm64 retain the existing .NET server in 0.8.0.
+
 ## 0.7.2
 
 ### PowerShell sessions

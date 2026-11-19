@@ -2,7 +2,7 @@
   "name": "inazuma-pwsh",
   "displayName": "Zuma MCP",
   "description": "Persistent PowerShell sessions and structured .NET, Playwright, bun test, pytest, and Vitest diagnostics for AI coding in VS Code on Windows, Linux, and macOS.",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "publisher": "ShunsukeF",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -20,7 +20,7 @@
   "categories": ["AI", "Testing", "Debuggers", "Other"],
   "keywords": [
     "mcp", "model context protocol", "copilot", "agent", "ai",
-    "powershell", "pwsh", "csharp", "c#", "dotnet", ".net", "msbuild",
+    "powershell", "pwsh", "rust", "csharp", "c#", "dotnet", ".net", "msbuild",
     "typescript", "javascript", "tsc", "bun", "node", "vitest", "playwright",
     "python", "pytest", "test", "diagnostics", "terminal",
     "shell", "windows", "bun test", "dotnet test", "ps1"
@@ -61,11 +61,11 @@
   ],
   "scripts": {
     "test": "node test-extension.cjs",
-    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.7.2-win32-x64.vsix",
-    "package:linux-x64": "vsce package --target linux-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.7.2-linux-x64.vsix",
-    "package:linux-arm64": "vsce package --target linux-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.7.2-linux-arm64.vsix",
-    "package:darwin-x64": "vsce package --target darwin-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.7.2-darwin-x64.vsix",
-    "package:darwin-arm64": "vsce package --target darwin-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.7.2-darwin-arm64.vsix"
+    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.8.0-win32-x64.vsix",
+    "package:linux-x64": "vsce package --target linux-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.8.0-linux-x64.vsix",
+    "package:linux-arm64": "vsce package --target linux-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.8.0-linux-arm64.vsix",
+    "package:darwin-x64": "vsce package --target darwin-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.8.0-darwin-x64.vsix",
+    "package:darwin-arm64": "vsce package --target darwin-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.8.0-darwin-arm64.vsix"
   },
   "devDependencies": {
     "@types/vscode": "1.101.0",

@@ -48,17 +48,16 @@ Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` id
 
 ## Build and verification
 
-The source targets .NET 10 and ModelContextProtocol 2.4.0. Each platform build is self-contained and single-file; on first launch it extracts assemblies to a cache. Trimming and Native AOT are disabled. The worker script `powershell-worker.ps1` is deployed alongside the binary. NuGet audits direct and transitive dependencies during restore; review the audit and the latest runtime security updates before release.
+The compatibility source targets .NET 10 and ModelContextProtocol 2.4.0. On Windows x64 0.8.0, the published MCP entry point is a 0.5 MiB Rust binary that handles UTF-8 Markdown outlines and explicit line ranges locally. It forwards the other tools over stdio to the self-contained, single-file C# compatibility server bundled as `InazumaPwsh.core.exe`; Linux and macOS continue to publish the C# server as the entry point. Native AOT remains disabled for the C# server, while `powershell-worker.ps1` is deployed beside it. NuGet audits direct and transitive dependencies during restore; review the audit and the latest runtime security updates before release.
 
 From the project directory:
 
 ```powershell
 dotnet build InazumaPwsh.csproj --nologo -v:q
-node test-mcp.mjs
-$sourceRoot = (Get-Location).Path
-dotnet publish InazumaPwsh.csproj -c Release -p:RuntimeFrameworkVersion=10.0.15 "-p:PathMap=$sourceRoot=/_/inazuma-pwsh" -o artifacts/win-x64-0.5.0 --nologo -v:q
-node test-mcp.mjs artifacts/win-x64-0.5.0/InazumaPwsh.exe
-# Build one VSIX per platform (cross-publishes the server): node vscode-extension/build-target.mjs <win32-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64>
+cargo test --release --manifest-path rust/zuma-mcp/Cargo.toml
+node vscode-extension/build-target.mjs win32-x64
+node rust/zuma-mcp/tests/real-smoke.mjs vscode-extension/server/win-x64/InazumaPwsh.exe
+# Build one VSIX per platform: node vscode-extension/build-target.mjs <win32-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64>
 ```
 
 Reproducibility requires the same source, SDK, runtime, dependencies, and build settings. Path mapping alone is not a guarantee across builds.
