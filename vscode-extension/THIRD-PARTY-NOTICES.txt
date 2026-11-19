@@ -50,6 +50,22 @@ TABLE OF RUNTIME COMPONENTS AND LICENSES
 - ModelContextProtocol.Core/2.4.0                         [License: Apache-2.0]
 - System.Diagnostics.EventLog/10.0.0                      [License: MIT]
 
+Rust front end runtime components on win32-x64:
+
+- Rust standard library                                    [License: MIT OR Apache-2.0, with LLVM exception]
+- serde/1.0.229                                             [License: MIT OR Apache-2.0]
+- serde_core/1.0.229                                        [License: MIT OR Apache-2.0]
+- serde_json/1.0.154                                        [License: MIT OR Apache-2.0]
+- itoa/1.0.19                                               [License: MIT OR Apache-2.0]
+- memchr/2.8.3                                              [License: Unlicense OR MIT]
+- zmij/1.0.23                                               [License: MIT]
+
+Rust build-time procedural components are proc-macro2/1.0.107,
+quote/1.0.47, serde_derive/1.0.229, syn/3.0.10, and
+unicode-ident/1.0.27. Their Cargo metadata records MIT or Apache-2.0;
+unicode-ident additionally requires the Unicode-3.0 notice. Source and
+license files are available from crates.io and each crate repository.
+
 ========================================================================
 COMPONENT LICENSES AND NOTICES
 ========================================================================
