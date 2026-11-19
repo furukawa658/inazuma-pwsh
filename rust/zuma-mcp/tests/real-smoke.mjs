@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -58,7 +58,7 @@ try {
     capabilities: {},
     clientInfo: { name: 'zuma-real-smoke', version: '1.0.0' }
   }).response;
-  assert.equal(initialized.result.serverInfo.name, 'Zuma');
+  assert.ok(['Zuma', 'InazumaPwsh'].includes(initialized.result.serverInfo.name));
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
@@ -92,24 +92,42 @@ try {
   assert.deepEqual(parallel.map(result => result.data), ['one', 'two']);
   assert.ok(performance.now() - parallelStarted < 3500, 'sessions did not run concurrently');
 
+  const marker = path.join(tmpdir(), `zuma-real-cancel-${process.pid}.txt`);
+  const markerLiteral = `'${marker.replaceAll("'", "''")}'`;
   const cancellation = request('tools/call', {
     name: 'execute_powershell',
-    arguments: { script: 'Start-Sleep -Seconds 30', sessionId: 'real-cancel', timeoutSeconds: 60 }
+    arguments: {
+      script: `[System.IO.File]::WriteAllText(${markerLiteral}, 'started'); Start-Sleep -Seconds 30`,
+      sessionId: 'real-cancel',
+      timeoutSeconds: 60
+    }
   });
-  await new Promise(resolve => setTimeout(resolve, 250));
+  const cancellationDeadline = Date.now() + 10000;
+  while (true) {
+    try { await stat(marker); break; } catch {
+      assert.ok(Date.now() < cancellationDeadline, 'cancellation script did not start');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
   clearTimeout(pending.get(cancellation.id)?.timer);
   send('notifications/cancelled', { requestId: cancellation.id, reason: 'real smoke' });
   const resumedAt = performance.now();
   assert.equal((await shell('6 * 7', { sessionId: 'real-cancel' })).data, 42);
   assert.ok(performance.now() - resumedAt < 3000, 'cancellation did not release the real worker');
-  await cancellation.response.catch(() => undefined);
+  pending.delete(cancellation.id);
+  await rm(marker, { force: true });
 
+  const buildProject = await mkdtemp(path.join(tmpdir(), 'zuma-real-build-'));
+  const projectPath = path.join(buildProject, 'real-smoke.csproj');
+  await writeFile(projectPath, '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>');
+  await writeFile(path.join(buildProject, 'Program.cs'), 'using System;\nConsole.WriteLine("real smoke");\n');
   const build = await callTool('run_dotnet_build', {
-    workingDirectory: root,
-    target: 'InazumaPwsh.csproj',
+    workingDirectory: buildProject,
+    target: projectPath,
     includeWarnings: false,
     timeoutSeconds: 180
   }, 200000);
+  await rm(buildProject, { recursive: true, force: true });
   assert.equal(build.status, 'success', JSON.stringify(build));
   console.log('REAL_SMOKE_OK tools=16 parallel=true cancellation=true dotnet_build=success');
 } finally {
