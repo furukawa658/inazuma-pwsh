@@ -709,7 +709,9 @@ try {
         const payload = { suites: [{ file: 'sample.spec.ts', specs: [{ title: 'fails', tests: [{ status: 'unexpected', results: [{ status: 'failed', attachments: [{ name: 'trace', path: 'test-results/trace.zip', contentType: 'application/zip' }] }] }] }] }] };
         await writeFile(path.join(cliDirectory, 'cli.js'), `const fs=require('node:fs'); fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_NAME, ${JSON.stringify(JSON.stringify(payload))}); process.exitCode=1;`);
         const response = await tool('run_playwright', { workingDirectory: project });
-        assert.equal(response.failures[0].attachments[0].path, path.join(project, 'test-results', 'trace.zip'));
+        const attachmentPath = response.failures[0].attachments[0].path;
+        const expectedPaths = [project, await realpath(project)].map(directory => path.join(directory, 'test-results', 'trace.zip'));
+        assert.ok(expectedPaths.includes(attachmentPath), attachmentPath);
         await rm(response.fullLogPath);
     });
     await check('Playwright malformed reports never false-success', async () => {
@@ -1412,7 +1414,7 @@ process.exitCode = 1;
         await call(`Add-Type -AssemblyName System.IO.Compression; $z = [System.IO.Compression.ZipArchive]::new([System.IO.File]::Create(${literal(zipPath)}), [System.IO.Compression.ZipArchiveMode]::Create); try { $writer = [System.IO.StreamWriter]::new($z.CreateEntry('0.trace').Open()); $writer.Write(${literal(trace)}); $writer.Dispose() } finally { $z.Dispose() }`, { workingDirectory: fixture });
         const inspected = await tool('inspect_playwright_trace', { tracePath: 'trace-colors.zip', workingDirectory: fixture });
         assert.equal(inspected.status, 'inspected', JSON.stringify(inspected));
-        assert.equal(inspected.tracePath, zipPath);
+        assert.equal(await realpath(inspected.tracePath), await realpath(zipPath));
         assert.equal(inspected.failedAction.apiName, 'expect.visible');
         assert.equal(inspected.failedAction.error, 'Assertion failed');
         assert.equal(inspected.consoleErrors[0].text, 'Console failure');
@@ -1426,11 +1428,11 @@ process.exitCode = 1;
         assert.ok(inspected.uncaughtErrors[1].stack.every(frame => frame === frame.trim() && !frame.includes('node_modules/playwright')));
         const missing = await tool('inspect_playwright_trace', { tracePath: 'missing.zip', workingDirectory: fixture });
         assert.equal(missing.status, 'error');
-        assert.equal(missing.tracePath, path.join(fixture, 'missing.zip'));
+        assert.equal(path.join(await realpath(path.dirname(missing.tracePath)), path.basename(missing.tracePath)), path.join(await realpath(fixture), 'missing.zip'));
         assert.ok(missing.errors.some(error => error.includes('Trace file not found') && error.includes('missing.zip')), JSON.stringify(missing));
         const relative = await tool('inspect_playwright_trace', { tracePath: path.relative(process.cwd(), zipPath) });
         assert.equal(relative.status, 'inspected', JSON.stringify(relative));
-        assert.equal(relative.tracePath, zipPath);
+        assert.equal(await realpath(relative.tracePath), await realpath(zipPath));
 
         const longMessage = 'Long assertion ' + 'x'.repeat(600);
         const longTrace = [
