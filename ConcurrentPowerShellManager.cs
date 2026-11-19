@@ -9,6 +9,7 @@ public sealed class ConcurrentPowerShellManager : IDisposable
     {
         public PowerShellSession Session { get; } = new();
         public int Users { get; set; }
+        public DateTime Created { get; } = DateTime.UtcNow;
         public DateTime LastUsed { get; set; } = DateTime.UtcNow;
     }
 
@@ -36,9 +37,29 @@ public sealed class ConcurrentPowerShellManager : IDisposable
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopping);
         return await session.ResetSessionAsync(linked.Token);
-    });
+    }, createIfMissing: false);
 
-    private async Task<string> UseAsync(string? sessionId, Func<PowerShellSession, Task<string>> action)
+    public string ListSessions()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return JsonDefaults.Serialize(new
+            {
+                status = "success",
+                sessions = _sessions.Select(pair => new
+                {
+                    sessionId = pair.Key,
+                    currentLocation = pair.Value.Session.CurrentLocation,
+                    createdAt = pair.Value.Created,
+                    lastUsedAt = pair.Value.LastUsed,
+                    busy = pair.Value.Users > 0 || pair.Value.Session.IsStopping
+                }).ToArray()
+            });
+        }
+    }
+
+    private async Task<string> UseAsync(string? sessionId, Func<PowerShellSession, Task<string>> action, bool createIfMissing = true)
     {
         var key = sessionId ?? "default";
         if (key.Length is < 1 or > 64 || !key.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_'))
@@ -50,6 +71,8 @@ public sealed class ConcurrentPowerShellManager : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_sessions.TryGetValue(key, out entry!))
             {
+                if (!createIfMissing)
+                    return JsonDefaults.Serialize(new { status = "success", existed = false, data = "Session does not exist." });
                 if (_sessions.Count >= 6)
                 {
                     var victim = _sessions.Where(pair => pair.Value.Users == 0 && !pair.Value.Session.IsStopping)

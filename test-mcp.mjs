@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const hostRid = process.platform === 'win32' ? 'win-x64'
@@ -13,7 +15,7 @@ const hostRid = process.platform === 'win32' ? 'win-x64'
 const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostRid, process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
 const spawnStartedAt = performance.now();
 const server = spawn(executable, process.argv.slice(3), {
-    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '' }
+    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '', ZUMA_WORKSPACE_ROOT: root }
 });
 const pending = new Map();
 let nextId = 0;
@@ -86,6 +88,7 @@ function outline(peeked) {
 const startedAt = performance.now();
 let passed = 0;
 async function check(name, run) {
+    if (process.env.INAZUMA_TEST_FILTER && !name.includes(process.env.INAZUMA_TEST_FILTER)) return;
     if (process.env.INAZUMA_OUTLINE_ONLY && !name.startsWith('outline regression')) return;
     if (process.env.INAZUMA_USAGE_ONLY && name !== 'usage accounting for unmeasured calls') return;
     await run();
@@ -104,6 +107,192 @@ try {
     const execute = listed.result.tools.find(tool => tool.name === 'execute_powershell');
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
+    await check('file reading regression outlines expression members and decorators', async () => {
+        const cs = path.join(fixture, 'expression.cs');
+        await writeFile(cs, ['public class Sample', '{', '    public int Add(int a, int b) => a + b;', '    public int X => 1;', '    public void Declared();', '}'].join('\n'));
+        const entries = outline(await tool('peek_file', { path: cs }));
+        assert.ok(entries.some(entry => entry.title.includes('Add(')));
+        assert.ok(entries.some(entry => entry.title.includes('X =>')));
+        assert.ok(!entries.some(entry => entry.title.includes('Declared(')));
+        assert.deepEqual(outline(await tool('peek_file', { path: cs, maxLevel: 1 })).map(entry => entry.title), ['public class Sample']);
+        const py = path.join(fixture, 'decorated.py');
+        await writeFile(py, ['def previous():', '    pass', '@pytest.mark.skip', '@other(', '    reason=")", # closing parenthesis in a string', ')', '@staticmethod', 'def decorated():', '    pass', '@klass', 'class Next:', '    pass'].join('\n'));
+        const python = outline(await tool('peek_file', { path: py }));
+        assert.deepEqual(python.map(entry => [entry.start, entry.end]), [[1, 2], [3, 9], [10, 12]]);
+    });
+    await check('file reading regression supports ranges and useful missing section suggestions', async () => {
+        const doc = path.join(fixture, 'range-fixture.md');
+        await writeFile(doc, '# Alpha section\nfirst body\n## Beta heading\nunique-body-token\n# Gamma\nlast');
+        assert.match((await tool('read_section', { path: doc, startLine: 4, endLine: 2 })).message, /startLine.*endLine/);
+        const fuzzy = await tool('read_section', { path: doc, query: 'Alphx' });
+        assert.equal(fuzzy.status, 'error');
+        assert.equal(fuzzy.candidates[0], 'Alpha section');
+        assert.ok(fuzzy.candidates.length <= 10);
+        const body = await tool('read_section', { path: doc, query: 'unique-body-token' });
+        assert.equal(body.bodyMatches[0].line, 4);
+        const multi = await tool('read_section', { path: doc, ranges: [{ startLine: 2, endLine: 2 }, 'Gamma', { query: 'Beta' }] });
+        assert.equal(multi.status, 'success');
+        assert.deepEqual(multi.ranges.map(item => item.result.startLine), [2, 5, 3]);
+        assert.deepEqual(multi.ranges.map(item => item.label), ['2-2', 'Gamma', 'Beta']);
+    });
+    await check('file reading regression distributes literal search and respects ignores', async () => {
+        const project = path.join(fixture, 'search-regression');
+        await mkdir(path.join(project, 'node_modules'), { recursive: true });
+        assert.equal(spawnSync('git', ['init', '-q', project]).status, 0);
+        await writeFile(path.join(project, '.gitignore'), 'ignored.txt\n');
+        await writeFile(path.join(project, 'a.txt'), 'before\n    a.b\n    a.b\n    a.b\nafter');
+        await writeFile(path.join(project, 'b.txt'), 'before\n  a.b\nafter');
+        await writeFile(path.join(project, 'ignored.txt'), 'a.b');
+        await writeFile(path.join(project, 'excluded.txt'), 'a.b');
+        await writeFile(path.join(project, 'node_modules', 'skip.txt'), 'a.b');
+        await writeFile(path.join(project, 'regex.txt'), 'axb');
+        const result = await tool('search_files', { path: project, pattern: 'a.b', literal: true, contextLines: 1, maxPerFile: 2, maxResults: 2, exclude: ['excluded.txt'] });
+        assert.equal(result.status, 'success', JSON.stringify(result));
+        assert.equal(result.totalMatches, 4);
+        assert.deepEqual(result.files.map(file => file.file), ['a.txt', 'b.txt']);
+        assert.deepEqual(result.files.map(file => file.matches.length), [1, 1]);
+        assert.equal(result.files[0].omitted, 2);
+        assert.equal(result.files[0].matches[0], '2|     a.b');
+        assert.deepEqual(result.files[0].context[0].before, ['1| before']);
+        assert.deepEqual(result.files[0].context[0].after, ['3|     a.b']);
+        assert.ok((await tool('search_files', { path: project, pattern: 'a.b' })).totalMatches > result.totalMatches);
+    });
+    await check('file reading regression detects Japanese log issues without zero summaries', async () => {
+        const log = path.join(fixture, 'japanese-build.log');
+        await writeFile(log, ['0 エラー', '0 個の警告', '0 件のエラー', '0 Error(s)', '0 Warning(s)', 'エラー 発生', '警告 発生', '処理失敗', '例外 発生', '0 エラー 1 警告'].join('\n'));
+        const result = await tool('summarize_log', { path: log, contextLines: 0 });
+        assert.equal(result.matchedLines, 5, JSON.stringify(result));
+        assert.deepEqual(result.groups.map(group => group.firstLine), [6, 7, 8, 9, 10]);
+    });
+    await check('terminating errors retain preceding output', async () => {
+        for (const script of ["'before'; throw 'boom'", "'before'; $ErrorActionPreference='Stop'; Get-Item -LiteralPath 'missing-zuma-test-file'"]) {
+            const response = await call(script, { sessionId: 'terminating', workingDirectory: fixture });
+            assert.equal(response.status, 'error', JSON.stringify(response));
+            assert.match(response.errors.join('\n'), /boom|missing-zuma-test-file/i);
+            assert.match(JSON.stringify(response.data), /before/);
+        }
+    });
+    await check('working location persists and reset restores workspace', async () => {
+        const sessionId = 'location-test';
+        const coldStarted = performance.now();
+        assert.equal(await realpath((await call('(Get-Location).Path', { sessionId })).data), await realpath(root));
+        console.log(`MCP_COLD_SESSION_MS ${(performance.now() - coldStarted).toFixed(1)}`);
+        await call('Set-Location -LiteralPath ' + literal(fixture), { sessionId });
+        assert.equal(await realpath((await call('(Get-Location).Path', { sessionId })).data), await realpath(fixture));
+        await call('42', { sessionId, workingDirectory: root });
+        assert.equal(await realpath((await call('(Get-Location).Path', { sessionId })).data), await realpath(root));
+        await call('42', { sessionId, workingDirectory: fixture });
+        assert.equal((await tool('reset_powershell_session', { sessionId })).status, 'success');
+        assert.equal(await realpath((await call('(Get-Location).Path', { sessionId })).data), await realpath(root));
+    });
+    await check('information streams preserve output order', async () => {
+        const response = await call("'one'; Write-Host 'two'; 'three'; Write-Information 'four' -InformationAction Continue; 'five'; Write-Verbose 'details' -Verbose; Write-Debug 'debugging' -Debug; Write-Warning 'warning'", { sessionId: 'streams-test' });
+        assert.equal(response.status, 'success', JSON.stringify(response));
+        assert.deepEqual(response.data, ['one', 'two', 'three', 'four', 'five']);
+        assert.ok(response.warnings.some(value => value.includes('VERBOSE: details')));
+        assert.ok(response.warnings.some(value => value.includes('DEBUG: debugging')));
+        assert.ok(response.warnings.some(value => value.includes('warning')));
+    });
+    await check('truncated multi-line output has a plain text log', async () => {
+        const response = await call('1..300 | ForEach-Object { "line-$_-" + ("x" * 10) }', { sessionId: 'log-test', maxOutputChars: 1000 });
+        assert.equal(response.isTruncated, true, JSON.stringify(response));
+        const lines = (await readFile(response.fullLogPath, 'utf8')).split(/\r?\n/);
+        assert.equal(lines.length, 300);
+        assert.equal(lines[0], 'line-1-xxxxxxxxxx');
+        assert.equal(lines[299], 'line-300-xxxxxxxxxx');
+        const found = await tool('search_files', { path: response.fullLogPath, pattern: '^line-300-' });
+        assert.equal(found.totalMatches, 1);
+        await rm(response.fullLogPath);
+        const objects = await call('1..300 | ForEach-Object { [pscustomobject]@{ name = "object-$_"; value = "xxxxxxxxxx" } }', { sessionId: 'log-test', maxOutputChars: 1000 });
+        assert.equal(objects.isTruncated, true, JSON.stringify(objects));
+        const objectLines = (await readFile(objects.fullLogPath, 'utf8')).split(/\r?\n/);
+        assert.equal(objectLines.length, 300);
+        assert.match(objectLines[299], /object-300/);
+        await rm(objects.fullLogPath);
+    });
+    await check('session management lists and enforces the limit', async () => {
+        const absent = await tool('reset_powershell_session', { sessionId: 'absent-session' });
+        assert.deepEqual([absent.status, absent.existed], ['success', false]);
+        for (let index = 0; index < 6; index++) {
+            const response = await call(`$global:marker = ${index}`, { sessionId: `limit-${index}`, workingDirectory: fixture });
+            assert.equal(response.status, 'success', JSON.stringify(response));
+        }
+        let listing = await tool('list_powershell_sessions', {});
+        assert.equal(listing.sessions.length, 6, JSON.stringify(listing));
+        const first = listing.sessions.find(item => item.sessionId === 'limit-0');
+        assert.equal(await realpath(first.currentLocation), await realpath(fixture));
+        assert.ok(!Number.isNaN(Date.parse(first.createdAt)) && !Number.isNaN(Date.parse(first.lastUsedAt)));
+        assert.equal(first.busy, false);
+        assert.equal((await call('42', { sessionId: 'limit-6' })).data, 42);
+        listing = await tool('list_powershell_sessions', {});
+        assert.equal(listing.sessions.length, 6);
+        assert.ok(!listing.sessions.some(item => item.sessionId === 'limit-0'));
+        assert.equal((await tool('reset_powershell_session', { sessionId: 'limit-6' })).existed, true);
+        const running = Array.from({ length: 6 }, (_, index) => call('Start-Sleep -Seconds 4', { sessionId: `limit-${index + 1}` }));
+        const deadline = Date.now() + 3000;
+        do {
+            listing = await tool('list_powershell_sessions', {});
+            if (listing.sessions.every(item => item.busy)) break;
+            assert.ok(Date.now() < deadline, 'sessions did not become busy');
+            await new Promise(resolve => setTimeout(resolve, 20));
+        } while (true);
+        const rejected = await call('42', { sessionId: 'limit-extra' });
+        assert.equal(rejected.status, 'error');
+        assert.match(rejected.errors.join(' '), /limit reached/i);
+        await Promise.all(running);
+    });
+    await check('extension passes first local workspace and updates changes', async () => {
+        const require = createRequire(path.join(root, 'vscode-extension', 'extension.js'));
+        const disposable = { dispose() {} };
+        let provider, changed, workspaceChanged;
+        let changes = 0;
+        const vscode = {
+            EventEmitter: class { constructor() { this.event = () => disposable; } fire() { changes++; } dispose() {} },
+            workspace: {
+                workspaceFolders: [{ uri: { scheme: 'file', fsPath: fixture } }, { uri: { scheme: 'file', fsPath: root } }],
+                getConfiguration: () => ({ get: () => '' }),
+                onDidChangeConfiguration: callback => { changed = callback; return disposable; },
+                onDidChangeWorkspaceFolders: callback => { workspaceChanged = callback; return disposable; }
+            },
+            lm: { registerMcpServerDefinitionProvider: (_, value) => { provider = value; return disposable; } },
+            McpStdioServerDefinition: class { constructor(label, command, args, env) { Object.assign(this, { label, command, args, env }); } },
+            Uri: { file: value => value }, StatusBarAlignment: { Right: 0 },
+            window: { createStatusBarItem: () => ({ hide() {}, show() {}, dispose() {} }) },
+            commands: { registerCommand: () => disposable }
+        };
+        const sandbox = { module: { exports: {} }, process, require: name => {
+            if (name === 'vscode') return vscode;
+            if (name === 'node:fs') return { watchFile() {}, unwatchFile() {} };
+            return require(name);
+        } };
+        runInNewContext(await readFile(path.join(root, 'vscode-extension', 'extension.js'), 'utf8'), sandbox);
+        const context = { extensionPath: root, subscriptions: [] };
+        sandbox.module.exports.activate(context);
+        assert.equal(provider.provideMcpServerDefinitions()[0].env.ZUMA_WORKSPACE_ROOT, fixture);
+        vscode.workspace.workspaceFolders = [];
+        workspaceChanged();
+        assert.equal(changes, 1);
+        assert.equal(provider.provideMcpServerDefinitions()[0].env, undefined);
+        changed({ affectsConfiguration: () => true });
+        assert.equal(changes, 2);
+        for (const subscription of context.subscriptions) subscription.dispose();
+    });
+    await check('missing workspace uses the user home', async () => {
+        const env = { ...process.env, ZUMA_WORKSPACE_ROOT: path.join(fixture, 'missing') };
+        const child = spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], env });
+        const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+        const sendChild = async (id, method, params) => {
+            child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+            return JSON.parse((await lines.next()).value);
+        };
+        try {
+            const init = await sendChild(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'home-test', version: '1' } });
+            assert.ok(init.result?.serverInfo);
+            child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
+            const response = result(await sendChild(2, 'tools/call', { name: 'execute_powershell', arguments: { script: '(Get-Location).Path', sessionId: 'home-test' } }));
+            assert.equal(await realpath(response.data), await realpath(homedir()));
+        } finally { child.stdin.end(); child.kill(); }
+    });
     await check('public tool descriptions are in English', async () => {
         for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
@@ -440,9 +629,8 @@ try {
         pending.delete(work.id);
     });
     await check('explicit working directory and invalid path', async () => {
-        const before = (await call('(Get-Location).Path')).data;
         assert.equal(await realpath((await call('(Get-Location).Path', { workingDirectory: fixture })).data), await realpath(fixture));
-        assert.equal((await call('(Get-Location).Path')).data, before);
+        assert.equal(await realpath((await call('(Get-Location).Path')).data), await realpath(fixture));
         const invalid = await call("'must not execute'", { workingDirectory: path.join(fixture, 'missing') });
         assert.equal(invalid.status, 'error');
         assert.notEqual(invalid.data, 'must not execute');
@@ -511,7 +699,20 @@ try {
         assert.equal(failure.status, 'error', JSON.stringify(failure));
         assert.equal(failure.exitCode, 2);
         assert.ok(failure.globalErrors.includes('fixture launch failure'));
+        assert.match(failure.output, /fixture failure/);
         await rm(failure.fullLogPath);
+    });
+    await check('Playwright attachments resolve to absolute paths', async () => {
+        const project = path.join(fixture, 'playwright-attachments');
+        const cliDirectory = path.join(project, 'node_modules', 'playwright');
+        await mkdir(cliDirectory, { recursive: true });
+        const payload = { suites: [{ file: 'sample.spec.ts', specs: [{ title: 'fails', tests: [{ status: 'unexpected', results: [{ status: 'failed', attachments: [{ name: 'trace', path: 'test-results/trace.zip', contentType: 'application/zip' }] }] }] }] }] };
+        await writeFile(path.join(cliDirectory, 'cli.js'), `const fs=require('node:fs'); fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_NAME, ${JSON.stringify(JSON.stringify(payload))}); process.exitCode=1;`);
+        const response = await tool('run_playwright', { workingDirectory: project });
+        const attachmentPath = response.failures[0].attachments[0].path;
+        const expectedPaths = [project, await realpath(project)].map(directory => path.join(directory, 'test-results', 'trace.zip'));
+        assert.ok(expectedPaths.includes(attachmentPath), attachmentPath);
+        await rm(response.fullLogPath);
     });
     await check('Playwright malformed reports never false-success', async () => {
         const project = path.join(fixture, 'playwright-malformed');
@@ -604,7 +805,7 @@ process.exitCode = 1;
         await mkdir(cliDirectory, { recursive: true });
         const cliPath = path.join(cliDirectory, 'vitest.mjs');
         const spec = path.join(project, 'math.spec.ts').replaceAll('\\', '/');
-        const writer = payload => `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); if (process.argv[2] !== 'run') process.exit(9); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = ${payload.success ? 0 : 1};`;
+        const writer = payload => `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile.json=')).slice(18); if (process.argv[2] !== 'run' || !process.argv.includes('--reporter=default')) process.exit(9); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = ${payload.success ? 0 : 1};`;
         await writeFile(cliPath, writer({
             success: false, startTime: 1000, testResults: [
                 { name: spec, status: 'failed', message: '', endTime: 1250, assertionResults: [
@@ -644,6 +845,31 @@ process.exitCode = 1;
         assert.match(rejected.message, /managed by this tool/);
         assert.equal((await tool('run_vitest', { workingDirectory: fixture })).status, 'error');
     });
+    await check('diagnostic compactResponse preserves unexplained Vitest output', async () => {
+        const project = path.join(fixture, 'vitest-compact');
+        const cliDirectory = path.join(project, 'node_modules', 'vitest');
+        await mkdir(cliDirectory, { recursive: true });
+        const payload = { testResults: [{ name: path.join(project, 'sample.ts'), status: 'failed', assertionResults: [{ fullName: 'fails', status: 'failed', failureMessages: ['AssertionError: expected 1 to be 2'] }] }] };
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out=process.argv.find(a=>a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); console.log('AssertionError: expected 1 to be 2\\nTest Files  1 failed\\nunknown warning'); process.exitCode=1;`);
+        const compact = await tool('run_vitest', { workingDirectory: project });
+        const raw = await tool('run_vitest', { workingDirectory: project, compactResponse: false });
+        assert.doesNotMatch(compact.output, /AssertionError/);
+        assert.match(compact.output, /Test Files  1 failed/);
+        assert.match(compact.output, /unknown warning/);
+        assert.match(raw.output, /AssertionError/);
+        await rm(compact.fullLogPath);
+        await rm(raw.fullLogPath);
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out=process.argv.find(a=>a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); console.log(${JSON.stringify('⎯⎯ Failed Tests 1 ⎯⎯\nFAIL sample.ts\n- Expected\n+ Received\n⎯⎯ Unhandled Errors ⎯⎯\nUnhandled error: external service failed\nTest Files  1 failed\nJSON report written to temporary.json')}); process.exitCode=1;`);
+        const external = await tool('run_vitest', { workingDirectory: project });
+        assert.match(external.output, /Unhandled error: external service failed/);
+        assert.match(external.output, /Test Files  1 failed/);
+        assert.doesNotMatch(external.output, /Failed Tests|Expected|Received|JSON report written/);
+        await rm(external.fullLogPath);
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out=process.argv.find(a=>a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); for (let index=0; index<80; index++) console.log('error line ' + index + ' ${'x'.repeat(50)}'); process.exitCode=1;`);
+        const long = await tool('run_vitest', { workingDirectory: project, compactResponse: false });
+        assert.equal(long.output, Array.from({ length: 80 }, (_, index) => `error line ${index} ${'x'.repeat(50)}\n`).join(''));
+        await rm(long.fullLogPath);
+    });
     await check('contextLines adds clamped source context to failures', async () => {
         const project = path.join(fixture, 'context');
         const cliDirectory = path.join(project, 'node_modules', 'vitest');
@@ -654,7 +880,7 @@ process.exitCode = 1;
         const spec = specPath.replaceAll('\\', '/');
         const failure = line => ({ fullName: `fails ${line}`, status: 'failed', failureMessages: [`Error: boom\n    at ${spec}:${line}:1`] });
         const payload = { success: false, testResults: [{ name: spec, status: 'failed', message: '', assertionResults: [failure(15), failure(1), failure(30)] }] };
-        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
         const withContext = await tool('run_vitest', { workingDirectory: project, contextLines: 2 });
         const [middle, first, last] = withContext.failures;
         assert.match(middle.codeContext, /^ 13\| line13\n 14\| line14\n>15\| expect\(1\)\.toBe\(2\); \/\/ x+\.\.\.\n 16\| line16\n 17\| line17$/, middle.codeContext);
@@ -669,7 +895,7 @@ process.exitCode = 1;
 
         const run = async (files, contextLines) => {
             const results = files.map(([file, line]) => ({ name: file, status: 'failed', message: '', assertionResults: [{ fullName: `fails ${path.basename(file)}`, status: 'failed', failureMessages: [`Error: boom\n    at ${file.replaceAll('\\', '/')}:${line}:1`] }] }));
-            await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); fs.writeFileSync(out, JSON.stringify(${JSON.stringify({ success: false, testResults: results })})); process.exitCode = 1;`);
+            await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify({ success: false, testResults: results })})); process.exitCode = 1;`);
             return tool('run_vitest', { workingDirectory: project, contextLines });
         };
         const sjisPath = path.join(project, 'sjis.ts');
@@ -800,10 +1026,10 @@ process.exitCode = 1;
         await writeFile(source, 'line1\nAssert.Equal(1, 2);\nline3\n');
         // dotnet test runs the VSTest target, so this project stands in for a real test project.
         await writeFile(path.join(project, 'fake.proj'), `<Project><Target Name="Restore" /><Target Name="VSTest"><Copy SourceFiles="$(MSBuildProjectDirectory)/sample.trx" DestinationFiles="$(VSTestResultsDirectory)/out.trx" /><Error Text="Test Run Failed." Condition="Exists('$(MSBuildProjectDirectory)/fail')" /></Target></Project>`);
-        const failedResult = (name, line) => `<UnitTestResult testName="${name}" outcome="Failed" duration="00:00:00.0100000"><Output><ErrorInfo><Message>Assert.Equal() Failure</Message><StackTrace>   at Xunit.Assert.Equal()\n   at Demo.CalcTests.Adds() in ${source}:line ${line}</StackTrace></ErrorInfo></Output></UnitTestResult>`;
-        const trx = results => `<?xml version="1.0" encoding="utf-8"?><TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>${results}</Results></TestRun>`;
+        const failedResult = (name, line) => `<UnitTestResult testName="${name}" outcome="Failed" duration="00:00:00.0100000"><Output><ErrorInfo><Message>Assert.Equal() Failure&#13;&#10;Expected 1</Message><StackTrace>   at Xunit.Assert.Equal()\n   at System.Reflection.MethodBaseInvoker.Invoke()\n   at System.RuntimeMethodHandle.InvokeMethod()\n   at Demo.CalcTests.Adds() in ${source}:line ${line}\n--- End of stack trace from previous location ---</StackTrace></ErrorInfo></Output></UnitTestResult>`;
+        const trx = results => `<?xml version="1.0" encoding="utf-8"?><TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>${results}</Results><ResultSummary><RunInfos><RunInfo outcome="Error"><Text>[FAIL] Demo.CalcTests.Adds</Text></RunInfo></RunInfos></ResultSummary></TestRun>`;
         const passedResult = '<UnitTestResult testName="Demo.CalcTests.Ok" outcome="Passed" duration="00:00:00.0050000" />';
-        await writeFile(path.join(project, 'sample.trx'), trx(failedResult('Demo.CalcTests.Adds(x: 1)', 2) + failedResult('Demo.CalcTests.Adds(x: 2)', 2) + failedResult('Demo.CalcTests.Other', 3) + passedResult + '<UnitTestResult testName="Demo.CalcTests.Skip" outcome="NotExecuted" />'));
+        await writeFile(path.join(project, 'sample.trx'), trx(failedResult('Demo.CalcTests.Adds(x: 1)', 2) + failedResult('Demo.CalcTests.SameCause(x: 2)', 2) + failedResult('Demo.CalcTests.Other', 3) + passedResult + '<UnitTestResult testName="Demo.CalcTests.Skip" outcome="NotExecuted" />'));
         await writeFile(path.join(project, 'fail'), '');
         const failed = await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['fake.proj'], contextLines: 1 });
         assert.equal(failed.status, 'error', JSON.stringify(failed));
@@ -811,9 +1037,12 @@ process.exitCode = 1;
         assert.equal(failed.failures.length, 2);
         assert.deepEqual([failed.failures[0].file, failed.failures[0].line, failed.failures[0].count], ['CalcTests.cs', 2, 2]);
         assert.equal(failed.failures[1].count, undefined);
-        assert.equal(failed.failures[0].errors[0].message, 'Assert.Equal() Failure');
+        assert.equal(failed.failures[0].errors[0].message, 'Assert.Equal() Failure\nExpected 1');
+        assert.match(failed.failures[0].errors[0].stack, /Demo\.CalcTests\.Adds/);
+        assert.doesNotMatch(failed.failures[0].errors[0].stack, /Xunit|System\.Reflection|RuntimeMethodHandle|End of stack trace/);
         assert.equal(failed.failures[0].codeContext, ' 1| line1\n>2| Assert.Equal(1, 2);\n 3| line3');
-        assert.deepEqual(failed.rerunArgs, ['--filter', 'FullyQualifiedName~Demo.CalcTests.Adds|FullyQualifiedName~Demo.CalcTests.Other']);
+        assert.deepEqual(failed.globalErrors, []);
+        assert.deepEqual(failed.rerunArgs, ['--filter', 'FullyQualifiedName~Demo.CalcTests.Adds|FullyQualifiedName~Demo.CalcTests.SameCause|FullyQualifiedName~Demo.CalcTests.Other']);
         await rm(failed.fullLogPath);
 
         await rm(path.join(project, 'fail'));
@@ -839,7 +1068,7 @@ process.exitCode = 1;
             { name: a, status: 'failed', message: '', assertionResults: [failure('one', a, 3, 'same'), failure('two', a, 3, 'same'), failure('three', a, 9, 'other'), { fullName: 'ok', status: 'passed', failureMessages: [] }] },
             { name: b, status: 'failed', message: '', assertionResults: [failure('four', b, 1, 'b')] }
         ] };
-        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile=')).slice(13); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
         const grouped = await tool('run_vitest', { workingDirectory: project });
         assert.equal(grouped.stats.failed, 4, JSON.stringify(grouped));
         assert.deepEqual(grouped.failures.map(item => [item.title, item.count]), [['one', 2], ['three', undefined], ['four', undefined]]);
@@ -859,9 +1088,13 @@ process.exitCode = 1;
         const second = await tool('run_tsc', { workingDirectory: project, onlyNew: true });
         assert.deepEqual([second.errorCount, second.newCount, second.fixedCount], [2, 1, 1], JSON.stringify(second));
         assert.deepEqual(second.diagnostics.map(item => item.code), ['TS7006']);
+        assert.doesNotMatch(second.output ?? '', /TS2322|TS7006/);
+        const unchanged = await tool('run_tsc', { workingDirectory: project, onlyNew: true, compactResponse: false });
+        assert.equal(unchanged.newCount, 0);
+        assert.doesNotMatch(unchanged.output ?? '', /TS2322|TS7006/);
         const all = await tool('run_tsc', { workingDirectory: project });
         assert.deepEqual([all.diagnostics.length, all.newCount], [2, undefined]);
-        for (const item of [first, second, all]) await rm(item.fullLogPath);
+        for (const item of [first, second, unchanged, all]) await rm(item.fullLogPath);
     });
     await check('run_eslint parses the JSON report and rejects managed arguments', async () => {
         const project = path.join(fixture, 'eslint');
@@ -963,7 +1196,7 @@ process.exitCode = 1;
         const project = path.join(fixture, 'pytest');
         await mkdir(project);
         const fakePython = path.join(project, process.platform === 'win32' ? 'fake-python.cmd' : 'fake-python');
-        await writeFile(path.join(project, 'fake-pytest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--junitxml=')).slice(11); if (process.argv[2] !== '-m' || process.argv[3] !== 'pytest') process.exit(9); const mode = fs.readFileSync('mode.txt', 'utf8').trim(); const payloads = JSON.parse(fs.readFileSync('payloads.json', 'utf8')); fs.writeFileSync(out, payloads[mode].xml); process.exitCode = payloads[mode].exitCode;`);
+        await writeFile(path.join(project, 'fake-pytest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--junitxml=')).slice(11); if (process.argv[2] !== '-m' || process.argv[3] !== 'pytest') process.exit(9); const mode = fs.readFileSync('mode.txt', 'utf8').trim(); const payloads = JSON.parse(fs.readFileSync('payloads.json', 'utf8')); fs.writeFileSync(out, payloads[mode === 'collection' ? 'failed' : mode].xml); if (mode === 'failed') console.log(${JSON.stringify('external warning\ntest_sample.py .F [100%]\n======== FAILURES ========\n________ test_fails ________\n> assert 1 == 2\nE AssertionError: assert 1 == 2\n----- generated xml file: report.xml -----\n===== short test summary info =====\nFAILED test_sample.py::test_fails\n===== 1 failed, 1 passed in 0.5s =====')}); if (mode === 'collection') console.log('===== ERRORS =====\\n_____ ERROR collecting test_broken.py _____\\nImportError: missing dependency\\n===== 1 error in 0.2s ====='); if (mode === 'dtd') console.log('raw crash detail\\nFAILURES'); process.exitCode = payloads[mode === 'collection' ? 'failed' : mode].exitCode;`);
         await writeFile(fakePython, process.platform === 'win32' ? '@node "%~dp0fake-pytest.mjs" %*\r\n' : '#!/bin/sh\nexec node "$(dirname "$0")/fake-pytest.mjs" "$@"\n', { mode: 0o755 });
         await writeFile(path.join(project, 'payloads.json'), JSON.stringify({
             failed: { exitCode: 1, xml: `<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="4" time="0.5"><testcase classname="test_sample" name="test_passes" time="0.001" /><testcase classname="test_sample" name="test_fails" time="0.001"><failure message="AssertionError: assert 1 == 2">def test_fails():\n&gt;       assert 1 == 2\nE       AssertionError: assert 1 == 2\n\ntest_sample.py:9: AssertionError</failure></testcase><testcase classname="test_sample" name="test_skipped" time="0"><skipped type="pytest.skip" message="demo">test_sample.py:12: demo</skipped></testcase><testcase classname="test_sample" name="test_setup" time="0"><error message="failed on setup">file ${path.join(project, 'test_sample.py')}, line 17\n  def test_setup(missing_fixture):\nE       fixture 'missing_fixture' not found</error></testcase></testsuite></testsuites>` },
@@ -973,12 +1206,25 @@ process.exitCode = 1;
         await writeFile(path.join(project, 'mode.txt'), 'failed');
         const failed = await tool('run_pytest', { workingDirectory: project, pythonPath: fakePython });
         assert.equal(failed.status, 'error', JSON.stringify(failed));
-        assert.deepEqual([failed.stats.passed, failed.stats.failed, failed.stats.skipped, failed.stats.total], [1, 2, 1, 4]);
+        assert.deepEqual([failed.stats.passed, failed.stats.failed, failed.stats.errors, failed.stats.skipped, failed.stats.total], [1, 1, 1, 1, 4]);
         assert.equal(failed.stats.duration, 500);
         assert.deepEqual(failed.failures.map(failure => [failure.title, failure.file, failure.line, failure.status]),
-            [['test_sample > test_fails', 'test_sample.py', 9, 'failure'], ['test_sample > test_setup', 'test_sample.py', 17, 'error']]);
+            [['test_sample > test_fails', 'test_sample.py', 9, 'failed'], ['test_sample > test_setup', 'test_sample.py', 17, 'error']]);
         assert.equal(failed.failures[0].errors[0].message, 'AssertionError: assert 1 == 2');
+        assert.match(failed.output, /external warning/);
+        assert.match(failed.output, /1 failed, 1 passed/);
+        assert.doesNotMatch(failed.output, /FAILURES|test_fails|assert 1 == 2|generated xml|short test summary/);
+        const raw = await tool('run_pytest', { workingDirectory: project, pythonPath: fakePython, compactResponse: false });
+        assert.match(raw.output, /FAILURES/);
+        assert.match(raw.output, /generated xml/);
+        await rm(raw.fullLogPath);
         await rm(failed.fullLogPath);
+
+        await writeFile(path.join(project, 'mode.txt'), 'collection');
+        const collection = await tool('run_pytest', { workingDirectory: project, pythonPath: fakePython });
+        assert.match(collection.output, /ERROR collecting test_broken.py/);
+        assert.match(collection.output, /ImportError: missing dependency/);
+        await rm(collection.fullLogPath);
 
         await writeFile(path.join(project, 'mode.txt'), 'empty');
         const empty = await tool('run_pytest', { workingDirectory: project, pythonPath: fakePython });
@@ -988,6 +1234,7 @@ process.exitCode = 1;
         await writeFile(path.join(project, 'mode.txt'), 'dtd');
         const dtd = await tool('run_pytest', { workingDirectory: project, pythonPath: fakePython });
         assert.equal(dtd.status, 'report_unavailable', JSON.stringify(dtd));
+        assert.equal(dtd.output, 'raw crash detail\nFAILURES\n');
         await rm(dtd.fullLogPath);
 
         const rejected = await tool('run_pytest', { workingDirectory: project, testArgs: ['--junitxml=other.xml'] });
@@ -999,10 +1246,10 @@ process.exitCode = 1;
         await check('real pytest JUnit report', async () => {
             const project = path.join(fixture, 'pytest-real');
             await mkdir(project);
-            await writeFile(path.join(project, 'test_real.py'), 'def test_ok():\n    assert True\n\n\ndef test_bad():\n    assert 1 == 2\n');
+            await writeFile(path.join(project, 'test_real.py'), 'def test_ok():\n    assert True\n\n\ndef test_bad():\n    assert 1 == 2\n\n\ndef test_error():\n    raise RuntimeError("boom")\n');
             const real = await tool('run_pytest', { workingDirectory: project, pythonPath: process.env.INAZUMA_TEST_PYTHON, testArgs: ['-p', 'no:cacheprovider'] });
             assert.equal(real.status, 'error', JSON.stringify(real));
-            assert.deepEqual([real.stats.passed, real.stats.failed], [1, 1]);
+            assert.deepEqual([real.stats.passed, real.stats.failed, real.stats.errors], [1, 1, 1], JSON.stringify(real));
             assert.equal(real.failures[0].file, 'test_real.py');
             assert.equal(real.failures[0].line, 6);
             await rm(real.fullLogPath);
@@ -1012,17 +1259,66 @@ process.exitCode = 1;
         await check('real bun test JUnit report', async () => {
             const project = path.join(fixture, 'bun');
             await mkdir(project);
-            await writeFile(path.join(project, 'sample.test.ts'), "import { describe, expect, test } from 'bun:test';\ndescribe('group', () => {\n    test('passes', () => { expect(1).toBe(1); });\n    test('fails', () => { expect(1).toBe(2); });\n    test.skip('skipped', () => {});\n});\n");
+            await writeFile(path.join(project, 'sample.test.ts'), "import { describe, expect, test } from 'bun:test';\ndescribe('group', () => {\n    test('passes', () => { expect(1).toBe(1); });\n    test('fails', () => { console.log('warning: outside test frame\\n44 | synthetic frame\\n  at synthetic-stack'); expect(1).toBe(2); });\n    test.skip('skipped', () => {});\n});\n");
             const failed = await tool('run_bun_test', { workingDirectory: project });
             assert.equal(failed.status, 'error', JSON.stringify(failed));
             assert.deepEqual([failed.stats.passed, failed.stats.failed, failed.stats.skipped], [1, 1, 1]);
             assert.deepEqual([failed.failures[0].title, failed.failures[0].file, failed.failures[0].line], ['group > fails', 'sample.test.ts', 4]);
+            assert.match(failed.output, /Ran 3 tests/);
+            assert.match(failed.output, /warning: outside test frame/);
+            assert.doesNotMatch(failed.output, /\(pass\)|\(fail\)|\(skip\)|expect\(1\)|at sample|synthetic frame|synthetic-stack/);
+            const raw = await tool('run_bun_test', { workingDirectory: project, compactResponse: false });
+            assert.match(raw.output, /\(fail\)/);
+            assert.match(raw.output, /expect\(1\)/);
+            await rm(raw.fullLogPath);
             await rm(failed.fullLogPath);
             await writeFile(path.join(project, 'sample.test.ts'), "import { expect, test } from 'bun:test';\ntest('passes', () => { expect(1).toBe(1); });\n");
             const success = await tool('run_bun_test', { workingDirectory: project });
             assert.equal(success.status, 'success', JSON.stringify(success));
             await rm(success.fullLogPath);
+            const noMatches = await tool('run_bun_test', { workingDirectory: project, testArgs: ['-t', 'no-such-test-12345'] });
+            assert.notEqual(noMatches.status, 'success', JSON.stringify(noMatches));
+            assert.ok(noMatches.globalErrors.length > 0, JSON.stringify(noMatches));
+            await rm(noMatches.fullLogPath);
             assert.match((await tool('run_bun_test', { workingDirectory: project, testArgs: ['--reporter=dots'] })).message, /managed by this tool/);
+        });
+    }
+    if (process.env.ZUMA_TRIAL_ROOT) {
+        await check('real trial diagnostic tools', async () => {
+            const project = process.env.ZUMA_TRIAL_ROOT;
+            const dotnet = path.join(project, 'dotnet');
+            const cases = [
+                ['bun', 'run_bun_test', { workingDirectory: project, testArgs: ['tests/calc.test.ts'] }],
+                ['vitest', 'run_vitest', { workingDirectory: project, testArgs: ['vt/calc.spec.ts'] }],
+                ['pytest', 'run_pytest', { workingDirectory: path.join(project, 'py') }],
+                ['playwright', 'run_playwright', { workingDirectory: project, testArgs: ['pw/demo.spec.ts'] }],
+                ['dotnet', 'run_dotnet_test', { workingDirectory: dotnet, testArgs: ['ZumaTests.csproj', '--no-restore'] }],
+                ['build', 'run_dotnet_build', { workingDirectory: dotnet, target: 'ZumaTests.csproj', includeWarnings: true, contextLines: 1 }],
+                ['tsc', 'run_tsc', { workingDirectory: project, onlyNew: true }],
+                ['eslint', 'run_eslint', { workingDirectory: project, eslintArgs: ['lint'] }]
+            ];
+            for (const [label, name, args] of cases) {
+                const response = await tool(name, args);
+                console.log(`TRIAL ${label} ${JSON.stringify(response)}`);
+                assert.notEqual(response.message, 'workingDirectory must be an existing absolute directory.', label);
+                if (['bun', 'vitest', 'pytest', 'playwright', 'dotnet'].includes(label)) {
+                    const raw = await tool(name, { ...args, compactResponse: false });
+                    console.log(`TRIAL_SIZE ${label} raw=${Buffer.byteLength(raw.output ?? '')} compact=${Buffer.byteLength(response.output ?? '')}`);
+                    assert.ok(response.failures?.length, JSON.stringify(response));
+                    assert.ok(Buffer.byteLength(response.output ?? '') < Buffer.byteLength(raw.output ?? ''), label);
+                    const unwanted = {
+                        bun: /\(fail\)|\(skip\)|\d+\s*\|/,
+                        vitest: /Failed Tests|JSON report written|Expected|Received/,
+                        pytest: /FAILURES|short test summary info|generated xml file|test_fail/,
+                        playwright: /Error Context:|attachment #|Call log:|Usage:/,
+                        dotnet: /\[SKIP\]|Error Message:|Stack Trace:|Results File:/
+                    };
+                    assert.doesNotMatch(response.output ?? '', unwanted[label]);
+                    assert.match(response.output ?? '', /failed|fail/i);
+                    if (raw.fullLogPath) await rm(raw.fullLogPath);
+                }
+                if (response.fullLogPath) await rm(response.fullLogPath);
+            }
         });
     }
     await check('run_dotnet_build with structurally incomplete SARIF yields report_unavailable', async () => {
@@ -1057,6 +1353,14 @@ process.exitCode = 1;
         assert.equal(malformed.status, 'report_unavailable', JSON.stringify(malformed));
         assert.equal(malformed.exitCode, 0);
         await rm(malformed.fullLogPath);
+    });
+    await check('run_dotnet_build captures missing project MSB1009', async () => {
+        const response = await tool('run_dotnet_build', { workingDirectory: fixture, target: 'does-not-exist.csproj' });
+        assert.equal(response.status, 'error');
+        assert.equal(response.summary.totalErrors, 1, JSON.stringify(response));
+        assert.equal(response.errors[0].ruleId, 'MSB1009');
+        assert.doesNotMatch(response.output ?? '', /MSB1009/);
+        await rm(response.fullLogPath);
     });
     await check('native timeout kills spawned children', async () => {
         const project = path.join(fixture, 'timeout');
@@ -1094,12 +1398,62 @@ process.exitCode = 1;
         assert.ok(JSON.stringify(inspected).length <= 2000);
         assert.equal((await tool('inspect_playwright_trace', { tracePath: path.join(fixture, 'missing.zip') })).status, 'error');
     });
+    await check('trace text, uncaught frames and relative paths', async () => {
+        const zipPath = path.join(fixture, 'trace-colors.zip');
+        const color = text => `\u001b[31m${text}\u001b[0m`;
+        const trace = [
+            { type: 'action', callId: 'fail', apiName: color('expect.visible'), error: { message: color('Assertion failed') } },
+            { type: 'error', message: 'Assertion failed', stack: [{ file: 'duplicate.js', line: 1, column: 1 }] },
+            { type: 'error', message: color('Uncaught failure'), stack: [
+                { function: color('userCode'), file: 'sample.spec.ts', line: 8, column: 3 },
+                { function: 'internal', file: 'node_modules/playwright/lib/runner.js', line: 1, column: 2 }
+            ] },
+            { type: 'error', message: 'Other failure', stack: `${color('Error: Other failure')}\n    at user (sample.spec.ts:12:2)\n    at internal (node_modules/playwright/lib/runner.js:1:2)` },
+            { type: 'console', messageType: 'error', text: color('Console failure') }
+        ].map(value => JSON.stringify(value)).join('\n');
+        await call(`Add-Type -AssemblyName System.IO.Compression; $z = [System.IO.Compression.ZipArchive]::new([System.IO.File]::Create(${literal(zipPath)}), [System.IO.Compression.ZipArchiveMode]::Create); try { $writer = [System.IO.StreamWriter]::new($z.CreateEntry('0.trace').Open()); $writer.Write(${literal(trace)}); $writer.Dispose() } finally { $z.Dispose() }`, { workingDirectory: fixture });
+        const inspected = await tool('inspect_playwright_trace', { tracePath: 'trace-colors.zip', workingDirectory: fixture });
+        assert.equal(inspected.status, 'inspected', JSON.stringify(inspected));
+        assert.equal(await realpath(inspected.tracePath), await realpath(zipPath));
+        assert.equal(inspected.failedAction.apiName, 'expect.visible');
+        assert.equal(inspected.failedAction.error, 'Assertion failed');
+        assert.equal(inspected.consoleErrors[0].text, 'Console failure');
+        assert.doesNotMatch(JSON.stringify(inspected), /\\u001b|\u001b/i);
+        assert.deepEqual(inspected.uncaughtErrors.map(error => error.message), ['Uncaught failure', 'Other failure']);
+        assert.ok(Array.isArray(inspected.uncaughtErrors[0].stack));
+        assert.match(inspected.uncaughtErrors[0].stack.join('\n'), /sample\.spec\.ts:8:3/);
+        assert.ok(inspected.uncaughtErrors[0].stack.every(frame => frame === frame.trim() && !frame.includes('node_modules/playwright')));
+        assert.ok(Array.isArray(inspected.uncaughtErrors[1].stack));
+        assert.ok(inspected.uncaughtErrors[1].stack.some(frame => frame.includes('sample.spec.ts:12:2')));
+        assert.ok(inspected.uncaughtErrors[1].stack.every(frame => frame === frame.trim() && !frame.includes('node_modules/playwright')));
+        const missing = await tool('inspect_playwright_trace', { tracePath: 'missing.zip', workingDirectory: fixture });
+        assert.equal(missing.status, 'error');
+        assert.equal(path.join(await realpath(path.dirname(missing.tracePath)), path.basename(missing.tracePath)), path.join(await realpath(fixture), 'missing.zip'));
+        assert.ok(missing.errors.some(error => error.includes('Trace file not found') && error.includes('missing.zip')), JSON.stringify(missing));
+        const relative = await tool('inspect_playwright_trace', { tracePath: path.relative(process.cwd(), zipPath) });
+        assert.equal(relative.status, 'inspected', JSON.stringify(relative));
+        assert.equal(await realpath(relative.tracePath), await realpath(zipPath));
+
+        const longMessage = 'Long assertion ' + 'x'.repeat(600);
+        const longTrace = [
+            { type: 'action', callId: 'long', apiName: 'expect', error: { message: color(longMessage) } },
+            { type: 'error', message: longMessage },
+            { type: 'error', message: `${longMessage} distinct` }
+        ].map(value => JSON.stringify(value)).join('\n');
+        const longZip = path.join(fixture, 'trace-long.zip');
+        await call(`Add-Type -AssemblyName System.IO.Compression; $z = [System.IO.Compression.ZipArchive]::new([System.IO.File]::Create(${literal(longZip)}), [System.IO.Compression.ZipArchiveMode]::Create); try { $writer = [System.IO.StreamWriter]::new($z.CreateEntry('0.trace').Open()); $writer.Write(${literal(longTrace)}); $writer.Dispose() } finally { $z.Dispose() }`, { workingDirectory: fixture });
+        const longResult = await tool('inspect_playwright_trace', { tracePath: longZip });
+        assert.equal(longResult.uncaughtErrors.length, 1, JSON.stringify(longResult));
+    });
     if (process.env.INAZUMA_REAL_TRACE) {
         await check('real Chrome trace error and DOM', async () => {
             const inspected = await tool('inspect_playwright_trace', { tracePath: process.env.INAZUMA_REAL_TRACE, maxOutputChars: 5000 });
             assert.equal(inspected.status, 'inspected', JSON.stringify(inspected));
-            assert.ok(inspected.latestDomSnapshot?.includes('Actual result'), JSON.stringify(inspected));
-            assert.ok(JSON.stringify(inspected).includes('fixture console error'), JSON.stringify(inspected));
+            assert.ok(inspected.failedAction?.error, JSON.stringify(inspected));
+            assert.ok(inspected.latestDomSnapshot?.includes('<BUTTON'), JSON.stringify(inspected));
+            assert.ok(inspected.consoleErrors.length > 0, JSON.stringify(inspected));
+            assert.doesNotMatch(JSON.stringify(inspected), /\\u001b|\u001b/i);
+            assert.ok(inspected.uncaughtErrors.every(error => error.message !== inspected.failedAction?.error), JSON.stringify(inspected));
         });
     }
     const startWith = env => new Promise((resolve, reject) => {

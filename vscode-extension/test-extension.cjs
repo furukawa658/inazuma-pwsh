@@ -27,7 +27,8 @@ async function main() {
                 assert.equal(section, 'inazumaPwsh');
                 return { get(key) { assert.equal(key, 'pwshPath'); return configuredPath; } };
             },
-            onDidChangeConfiguration(listener) { configurationChanged = listener; return disposable; }
+            onDidChangeConfiguration(listener) { configurationChanged = listener; return disposable; },
+            onDidChangeWorkspaceFolders() { return disposable; }
         },
         lm: { registerMcpServerDefinitionProvider(id, value) {
             assert.equal(id, manifest.contributes.mcpServerDefinitionProviders[0].id);
@@ -70,14 +71,14 @@ async function main() {
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.7.1');
+    assert.equal(manifest.version, '0.7.2');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.7.1-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.7.2-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping

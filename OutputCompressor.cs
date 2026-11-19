@@ -14,7 +14,7 @@ public static partial class OutputCompressor
     public sealed record CompressedResult(string Content, bool IsTruncated, int OriginalChars,
         int OriginalLines, string? FullLogPath);
 
-    public static async Task<CompressedResult> CompressAsync(string rawOutput, int maxChars = 6000)
+    public static async Task<CompressedResult> CompressAsync(string rawOutput, int maxChars = 6000, string? fullLogText = null)
     {
         maxChars = Math.Clamp(maxChars, 1000, 50000);
         var sanitized = AnsiRegex().Replace(rawOutput, "");
@@ -25,7 +25,7 @@ public static partial class OutputCompressor
         var directory = Path.Combine(Path.GetTempPath(), "inazuma-pwsh-logs");
         Directory.CreateDirectory(directory);
         var logPath = Path.Combine(directory, $"{Guid.NewGuid():N}.log");
-        await File.WriteAllTextAsync(logPath, sanitized, new UTF8Encoding(false));
+        await File.WriteAllTextAsync(logPath, AnsiRegex().Replace(fullLogText ?? sanitized, ""), new UTF8Encoding(false));
 
         var signals = new StringBuilder();
         var signalBudget = maxChars / 2;

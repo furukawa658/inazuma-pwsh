@@ -102,9 +102,12 @@ function activate(context) {
         provideMcpServerDefinitions() {
             if (!executable) return [];
             const pwshPath = vscode.workspace.getConfiguration('inazumaPwsh').get('pwshPath', '').trim();
-            const environment = pwshPath ? { INAZUMA_PWSH_PATH: pwshPath } : undefined;
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+            const environment = {};
+            if (pwshPath) environment.INAZUMA_PWSH_PATH = pwshPath;
+            if (workspaceRoot?.scheme === 'file') environment.ZUMA_WORKSPACE_ROOT = workspaceRoot.fsPath;
             const definition = new vscode.McpStdioServerDefinition(
-                'Zuma', executable, ['--parent-pid', String(process.pid)], environment, version);
+                'Zuma', executable, ['--parent-pid', String(process.pid)], Object.keys(environment).length ? environment : undefined, version);
             definition.cwd = vscode.Uri.file(path.dirname(executable));
             return [definition];
         },
@@ -120,7 +123,8 @@ function activate(context) {
         changes,
         vscode.workspace.onDidChangeConfiguration(event => {
             if (event.affectsConfiguration('inazumaPwsh.pwshPath')) changes.fire();
-        }));
+        }),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => changes.fire()));
     registerSavings(context);
     return provider;
 }

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,7 +27,8 @@ public static class DotnetBuildParser
         [property: JsonPropertyName("totalWarnings")] int TotalWarnings,
         [property: JsonPropertyName("capturedErrors")] int CapturedErrors,
         [property: JsonPropertyName("capturedWarnings")] int CapturedWarnings,
-        [property: JsonPropertyName("filesEvaluated")] int FilesEvaluated
+        [property: JsonPropertyName("filesEvaluated")] int FilesEvaluated,
+        [property: JsonPropertyName("totalInfos")] int TotalInfos = 0
     );
 
     private record BuildReport(
@@ -49,7 +51,8 @@ public static class DotnetBuildParser
         string workingDirectory,
         int exitCode,
         bool includeWarnings = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? logPath = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -70,18 +73,10 @@ public static class DotnetBuildParser
             }
         }
 
-        if (sarifFiles.Count == 0)
-        {
-            var emptyStatus = exitCode == 0 ? "report_unavailable" : "error";
-            return JsonSerializer.Serialize(new BuildReport(
-                emptyStatus, exitCode, new Summary(0, 0, 0, 0, 0), [], []),
-                JsonOptions);
-        }
-
         var allErrors = new List<Diagnostic>();
         var allWarnings = new List<Diagnostic>();
         var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        int totalErrors = 0, totalWarnings = 0, filesEvaluated = 0;
+        int totalErrors = 0, totalWarnings = 0, totalInfos = 0, filesEvaluated = 0;
         bool invalidReport = false;
 
         foreach (var file in sarifFiles)
@@ -151,12 +146,13 @@ public static class DotnetBuildParser
                             if (allErrors.Count < 30)
                                 allErrors.Add(new Diagnostic(ruleId, level, msg, path, line, col));
                         }
-                        else
+                        else if (level == "warning")
                         {
                             totalWarnings++;
                             if (includeWarnings && allWarnings.Count < 15)
                                 allWarnings.Add(new Diagnostic(ruleId, level, msg, path, line, col));
                         }
+                        else totalInfos++;
                     }
                 }
 
@@ -175,11 +171,27 @@ public static class DotnetBuildParser
             }
         }
 
+        if (!string.IsNullOrEmpty(logPath) && File.Exists(logPath))
+        {
+            foreach (var raw in File.ReadLines(logPath))
+            {
+                var match = Regex.Match(PlaywrightResultParser.StripAnsi(raw), @"^\s*(?:MSBUILD\s*:\s*)?error\s+(?<code>MSB\d+)\s*:\s*(?<message>.*?)(?:\s+\[[^\]]+\])?\s*$", RegexOptions.IgnoreCase);
+                if (!match.Success) continue;
+                var code = match.Groups["code"].Value;
+                var message = Truncate(match.Groups["message"].Value, 500);
+                if (allErrors.Any(error => error.RuleId.Equals(code, StringComparison.OrdinalIgnoreCase) && error.Message == message)) continue;
+                var key = $"{code}||||{message}";
+                if (!seenKeys.Add(key)) continue;
+                totalErrors++;
+                if (allErrors.Count < 30) allErrors.Add(new Diagnostic(code, "error", message, "", 0, 0));
+            }
+        }
+
         string status = filesEvaluated == 0 || invalidReport
             ? (exitCode == 0 ? "report_unavailable" : "error")
             : (exitCode == 0 && totalErrors == 0 ? "success" : "error");
 
-        return SerializeWithLimit(status, exitCode, totalErrors, totalWarnings, filesEvaluated, allErrors, allWarnings);
+        return SerializeWithLimit(status, exitCode, totalErrors, totalWarnings, totalInfos, filesEvaluated, allErrors, allWarnings);
     }
 
     private static (string path, int line, int col) ExtractLocation(JsonElement res, string workingDir)
@@ -228,7 +240,7 @@ public static class DotnetBuildParser
     }
 
     private static string SerializeWithLimit(
-        string status, int exitCode, int totalErrors, int totalWarnings, int filesEvaluated,
+        string status, int exitCode, int totalErrors, int totalWarnings, int totalInfos, int filesEvaluated,
         List<Diagnostic> errors, List<Diagnostic> warnings)
     {
         var curErrors = errors;
@@ -236,7 +248,7 @@ public static class DotnetBuildParser
 
         for (int attempt = 0; attempt < 4; attempt++)
         {
-            var summary = new Summary(totalErrors, totalWarnings, curErrors.Count, curWarnings.Count, filesEvaluated);
+            var summary = new Summary(totalErrors, totalWarnings, curErrors.Count, curWarnings.Count, filesEvaluated, totalInfos);
             var report = new BuildReport(status, exitCode, summary, curErrors, curWarnings);
             var json = JsonSerializer.Serialize(report, JsonOptions);
             if (json.Length <= 5500) return json;
@@ -263,7 +275,7 @@ public static class DotnetBuildParser
             }
         }
 
-        var finalSummary = new Summary(totalErrors, totalWarnings, curErrors.Count, curWarnings.Count, filesEvaluated);
+        var finalSummary = new Summary(totalErrors, totalWarnings, curErrors.Count, curWarnings.Count, filesEvaluated, totalInfos);
         return JsonSerializer.Serialize(new BuildReport(status, exitCode, finalSummary, curErrors, curWarnings), JsonOptions);
     }
 

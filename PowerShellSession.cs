@@ -16,8 +16,21 @@ public sealed class PowerShellSession : IDisposable
     private bool _disposed;
     private volatile bool _stopping;
     private long _nextRequestId;
+    private readonly string _initialLocation = GetInitialLocation();
+    private string? _currentLocation;
 
     public bool IsStopping => _stopping;
+    public string CurrentLocation => Volatile.Read(ref _currentLocation) ?? _initialLocation;
+
+    private static string GetInitialLocation()
+    {
+        var workspace = Environment.GetEnvironmentVariable("ZUMA_WORKSPACE_ROOT");
+        if (!string.IsNullOrWhiteSpace(workspace) && Path.IsPathFullyQualified(workspace) && Directory.Exists(workspace))
+            return Path.GetFullPath(workspace);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home) && Path.IsPathFullyQualified(home) && Directory.Exists(home)) return home;
+        throw new InvalidOperationException("Cannot determine an existing user home directory for the PowerShell session.");
+    }
 
     public void Initialize()
     {
@@ -149,7 +162,8 @@ public sealed class PowerShellSession : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            StandardErrorEncoding = Encoding.UTF8,
+            WorkingDirectory = _initialLocation
         };
         startInfo.ArgumentList.Add("-NoLogo");
         startInfo.ArgumentList.Add("-NoProfile");
@@ -292,10 +306,12 @@ public sealed class PowerShellSession : IDisposable
                 KillWorkerUnderLock();
                 await EnsureWorkerRunningUnderLock();
             }
+            Volatile.Write(ref _currentLocation, _initialLocation);
 
             return JsonDefaults.Serialize(new
             {
                 status = "success",
+                existed = true,
                 data = "PowerShell session has been reset successfully.",
                 errors = Array.Empty<string>(),
                 warnings = Array.Empty<string>(),
@@ -422,6 +438,8 @@ public sealed class PowerShellSession : IDisposable
 
             using var doc = JsonDocument.Parse(responseLine);
             var root = doc.RootElement;
+            if (root.TryGetProperty("location", out var location) && location.ValueKind == JsonValueKind.String)
+                Volatile.Write(ref _currentLocation, location.GetString());
 
             var stopped = root.TryGetProperty("stopped", out var stopProp) && stopProp.GetBoolean();
             if (stopped)
@@ -480,7 +498,10 @@ public sealed class PowerShellSession : IDisposable
                 text = JsonDefaults.Serialize(dataObject);
             }
 
-            var compressed = await OutputCompressor.CompressAsync(text, maxOutputChars);
+            var logText = !allStrings && dataObject is JsonElement { ValueKind: JsonValueKind.Array } array
+                ? string.Join(Environment.NewLine, array.EnumerateArray().Select(element => element.ToString()))
+                : null;
+            var compressed = await OutputCompressor.CompressAsync(text, maxOutputChars, logText);
 
             var output = compactResponse && !compressed.IsTruncated && dataObject != null &&
                 compressed.Content == (dataObject is string dataText ? dataText : JsonDefaults.Serialize(dataObject))

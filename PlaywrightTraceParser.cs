@@ -30,6 +30,14 @@ public static class PlaywrightTraceParser
         @"(?i)(password|token|secret|key|apikey|api_key|auth|access_token|refresh_token|credential|session)=([^&#\s]*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex AnsiRegex = new(
+        @"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-_])",
+        RegexOptions.Compiled);
+
+    private static readonly Regex PlaywrightFrameRegex = new(
+        @"(?:^|[^a-zA-Z0-9_])node_modules/(?:@playwright/|playwright(?:-core)?/)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly HashSet<string> VoidElements = new(StringComparer.OrdinalIgnoreCase)
     {
         "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"
@@ -40,7 +48,7 @@ public static class PlaywrightTraceParser
         "script", "style", "svg", "noscript"
     };
 
-    public static async Task<string> ParseAsync(string tracePath, int maxOutputChars = 6000, CancellationToken cancellationToken = default)
+    public static async Task<string> ParseAsync(string tracePath, int maxOutputChars = 6000, CancellationToken cancellationToken = default, string? workingDirectory = null)
     {
         if (maxOutputChars < 500)
         {
@@ -49,10 +57,32 @@ public static class PlaywrightTraceParser
 
         var result = new TraceResult();
 
-        if (string.IsNullOrWhiteSpace(tracePath) || !File.Exists(tracePath))
+        if (string.IsNullOrWhiteSpace(tracePath))
         {
             result.Status = "error";
-            result.Warnings.Add($"Trace file not found or empty path: {tracePath}");
+            result.Errors.Add("Trace path is empty.");
+            return SerializeResult(result, maxOutputChars);
+        }
+
+        try
+        {
+            var baseDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                ? Environment.CurrentDirectory
+                : Path.GetFullPath(workingDirectory);
+            tracePath = Path.GetFullPath(tracePath, baseDirectory);
+            result.TracePath = tracePath;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            result.Status = "error";
+            result.Errors.Add($"Invalid trace path or working directory: {ex.Message}");
+            return SerializeResult(result, maxOutputChars);
+        }
+
+        if (!File.Exists(tracePath))
+        {
+            result.Status = "error";
+            result.Errors.Add($"Trace file not found: {tracePath}");
             return SerializeResult(result, maxOutputChars);
         }
 
@@ -190,6 +220,15 @@ public static class PlaywrightTraceParser
         }
 
         var (failedCandidate, primaryError) = ResolveFailedAction(actions, errors, result);
+        if (primaryError != null)
+        {
+            var failureMessage = StripAnsi(primaryError.ErrorMessage);
+            result.UncaughtErrors.RemoveAll(error => string.Equals(error.Message, failureMessage, StringComparison.Ordinal));
+        }
+        foreach (var error in result.UncaughtErrors)
+        {
+            error.Message = ClipText(error.Message, 500) ?? "Unknown error";
+        }
         ResolveLatestDomSnapshot(domSnapshots, result, failedCandidate, primaryError, maxOutputChars, state);
     }
 
@@ -401,25 +440,20 @@ public static class PlaywrightTraceParser
             case "error":
                 {
                     var msg = root.TryGetProperty("message", out var mProp) ? mProp.GetString() : null;
-                    var stack = root.TryGetProperty("stack", out var sProp) ? sProp.ValueKind switch
-                    {
-                        JsonValueKind.String => sProp.GetString(),
-                        JsonValueKind.Array => sProp.GetRawText(),
-                        _ => null
-                    } : null;
+                    var stack = root.TryGetProperty("stack", out var sProp) ? ExtractStackFrames(sProp) : null;
                     if (string.IsNullOrEmpty(msg) && root.TryGetProperty("error", out var eProp))
                     {
                         msg = ExtractErrorMessage(eProp);
                     }
 
-                    if (!string.IsNullOrEmpty(msg) || !string.IsNullOrEmpty(stack))
+                    if (!string.IsNullOrEmpty(msg) || stack is { Count: > 0 })
                     {
                         if (result.UncaughtErrors.Count < MaxCollectionLimit)
                         {
                             result.UncaughtErrors.Add(new UncaughtErrorInfo
                             {
-                                Message = ClipText(msg ?? "Unknown error", 500) ?? "Unknown error",
-                                Stack = ClipText(stack, 1000)
+                                Message = StripAnsi(msg ?? "Unknown error"),
+                                Stack = stack
                             });
                         }
                     }
@@ -846,6 +880,43 @@ public static class PlaywrightTraceParser
         return null;
     }
 
+    private static string StripAnsi(string text) => AnsiRegex.Replace(text, string.Empty);
+
+    private static List<string>? ExtractStackFrames(JsonElement stack)
+    {
+        var frames = new List<string>();
+        if (stack.ValueKind == JsonValueKind.String)
+        {
+            foreach (var line in (stack.GetString() ?? string.Empty).Split('\n'))
+            {
+                var frame = StripAnsi(line).Trim();
+                if (frame.StartsWith("at ", StringComparison.Ordinal)) frames.Add(frame);
+            }
+        }
+        else if (stack.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in stack.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    frames.Add(StripAnsi(item.GetString() ?? string.Empty).Trim());
+                }
+                else if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.String)
+                {
+                    var location = file.GetString() ?? string.Empty;
+                    if (item.TryGetProperty("line", out var line)) location += $":{line}";
+                    if (item.TryGetProperty("column", out var column)) location += $":{column}";
+                    var function = item.TryGetProperty("function", out var fn) && fn.ValueKind == JsonValueKind.String ? fn.GetString() : null;
+                    frames.Add(StripAnsi(string.IsNullOrEmpty(function) ? $"at {location}" : $"at {function} ({location})").Trim());
+                }
+            }
+        }
+
+        return frames.Where(frame => frame.Length > 0 && !frame.Contains("node:internal", StringComparison.OrdinalIgnoreCase)
+            && !PlaywrightFrameRegex.IsMatch(frame.Replace('\\', '/')))
+            .Take(MaxCollectionLimit).Select(frame => ClipText(frame, 1000) ?? string.Empty).ToList();
+    }
+
     private static string? ClipText(string? text, int maxChars)
     {
         if (text == null)
@@ -853,6 +924,7 @@ public static class PlaywrightTraceParser
             return null;
         }
 
+        text = StripAnsi(text);
         if (text.Length <= maxChars)
         {
             return text;
@@ -887,6 +959,7 @@ public static class PlaywrightTraceParser
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
+        options.Converters.Add(new AnsiFreeStringConverter());
 
         var json = JsonSerializer.Serialize(result, options);
         if (json.Length <= maxOutputChars)
@@ -1096,6 +1169,8 @@ public static class PlaywrightTraceParser
     private sealed class TraceResult
     {
         public string Status { get; set; } = "inspected";
+        public string? TracePath { get; set; }
+        public List<string> Errors { get; set; } = new();
         public FailedActionInfo? FailedAction { get; set; }
         public List<HttpErrorInfo> HttpErrors { get; set; } = new();
         public List<ConsoleErrorInfo> ConsoleErrors { get; set; } = new();
@@ -1131,7 +1206,14 @@ public static class PlaywrightTraceParser
     private sealed class UncaughtErrorInfo
     {
         public string Message { get; set; } = string.Empty;
-        public string? Stack { get; set; }
+        public List<string>? Stack { get; set; }
+    }
+
+    private sealed class AnsiFreeStringConverter : JsonConverter<string>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.GetString();
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) => writer.WriteStringValue(StripAnsi(value));
     }
 
     private sealed class ActionCandidate

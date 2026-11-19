@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,12 +27,12 @@ public static class TestReportParser
 
     private record ErrorDetail([property: JsonPropertyName("message")] string Message, [property: JsonPropertyName("stack")] string Stack);
     private record Failure([property: JsonPropertyName("title")] string Title, [property: JsonPropertyName("file")] string File, [property: JsonPropertyName("line")] int Line, [property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("errors")] List<ErrorDetail> Errors, [property: JsonPropertyName("count")] int? Count = null);
-    private record Stats([property: JsonPropertyName("duration")] double Duration, [property: JsonPropertyName("passed")] int Passed, [property: JsonPropertyName("failed")] int Failed, [property: JsonPropertyName("skipped")] int Skipped, [property: JsonPropertyName("total")] int Total);
+    private record Stats([property: JsonPropertyName("duration")] double Duration, [property: JsonPropertyName("passed")] int Passed, [property: JsonPropertyName("failed")] int Failed, [property: JsonPropertyName("skipped")] int Skipped, [property: JsonPropertyName("total")] int Total, [property: JsonPropertyName("errors")] int Errors = 0);
     private record TestReport([property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("exitCode")] int ExitCode, [property: JsonPropertyName("stats")] Stats Stats, [property: JsonPropertyName("globalErrors")] List<string> GlobalErrors, [property: JsonPropertyName("failures")] List<Failure> Failures);
 
     private sealed class Accumulator
     {
-        public int Passed, Failed, Skipped;
+        public int Passed, Failed, Skipped, Errors;
         public double Duration;
         public List<string> GlobalErrors { get; } = [];
         public List<Failure> Failures { get; } = [];
@@ -77,8 +78,12 @@ public static class TestReportParser
                 var problem = testCase.Elements().FirstOrDefault(e => e.Name.LocalName is "failure" or "error");
                 if (problem != null)
                 {
-                    result.Failed++;
-                    result.AddFailure(ToFailure(testCase, problem, workingDirectory));
+                    var message = problem.Attribute("message")?.Value ?? "";
+                    var isError = problem.Name.LocalName == "error" || (noTestsExitCode == 5
+                        && Regex.IsMatch(message, @"^(?!AssertionError\b)(?:[\w.]*\.)?[A-Za-z_]\w*(?:Error|Exception)(?::|$)"));
+                    if (isError) result.Errors++;
+                    else result.Failed++;
+                    result.AddFailure(ToFailure(testCase, problem, workingDirectory) with { Status = isError ? "error" : "failed" });
                 }
                 else if (testCase.Elements().Any(e => e.Name.LocalName == "skipped")) result.Skipped++;
                 else result.Passed++;
@@ -143,6 +148,7 @@ public static class TestReportParser
         try
         {
             var result = new Accumulator();
+            var rerunNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var file in files)
             {
                 if (new FileInfo(file).Length > MaxReportBytes) throw new FormatException("Report file exceeded 50MB limit.");
@@ -151,8 +157,18 @@ public static class TestReportParser
                 var root = (await XDocument.LoadAsync(reader, LoadOptions.None, cancellationToken)).Root;
                 if (root?.Name.LocalName != "TestRun") throw new FormatException("TRX report root must be TestRun.");
 
+                var testNames = root.Descendants().Where(e => e.Name.LocalName == "UnitTest")
+                    .Where(e => e.Attribute("id") != null)
+                    .GroupBy(e => e.Attribute("id")!.Value).ToDictionary(group => group.Key, group =>
+                    {
+                        var method = group.First().Elements().FirstOrDefault(e => e.Name.LocalName == "TestMethod");
+                        var className = (method?.Attribute("className")?.Value ?? "").Split(',')[0].Trim();
+                        var name = method?.Attribute("name")?.Value ?? "";
+                        return className.Length > 0 && name.Length > 0 ? $"{className}.{name}" : "";
+                    });
                 foreach (var info in root.Descendants().Where(e => e.Name.LocalName == "RunInfo" && e.Attribute("outcome")?.Value == "Error"))
-                    result.GlobalErrors.Add(PlaywrightResultParser.Truncate(info.Value.Trim(), 400));
+                    if (!info.Value.Contains("[FAIL]", StringComparison.OrdinalIgnoreCase))
+                        result.GlobalErrors.Add(PlaywrightResultParser.Truncate(info.Value.Trim(), 400));
                 foreach (var item in root.Descendants().Where(e => e.Name.LocalName == "UnitTestResult" && !e.Ancestors().Any(a => a.Name.LocalName == "UnitTestResult")))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -162,11 +178,18 @@ public static class TestReportParser
                     if (outcome is not ("Failed" or "Error" or "Timeout" or "Aborted")) { result.Skipped++; continue; }
                     result.Failed++;
 
+                    var testId = item.Attribute("testId")?.Value ?? "";
+                    var testName = testNames.GetValueOrDefault(testId);
+                    if (string.IsNullOrEmpty(testName)) testName = (item.Attribute("testName")?.Value ?? "").Split('(')[0].Trim();
+                    if (!string.IsNullOrEmpty(testName)) rerunNames.Add(testName);
+
                     var error = item.Descendants().FirstOrDefault(e => e.Name.LocalName == "ErrorInfo");
-                    var message = error?.Elements().FirstOrDefault(e => e.Name.LocalName == "Message")?.Value.Trim() ?? "";
+                    var message = (error?.Elements().FirstOrDefault(e => e.Name.LocalName == "Message")?.Value.Trim() ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
                     var stack = error?.Elements().FirstOrDefault(e => e.Name.LocalName == "StackTrace")?.Value ?? "";
                     var location = DotnetLocationRegex.Match(stack);
-                    var stackLines = string.Join("\n", stack.Split(['\r', '\n']).Select(l => l.Trim()).Where(l => l.Length > 0));
+                    var stackLines = string.Join("\n", stack.Split(['\r', '\n']).Select(l => l.Trim()).Where(l => l.Length > 0
+                        && !l.StartsWith("--- End of stack trace", StringComparison.OrdinalIgnoreCase)
+                        && !Regex.IsMatch(l, @"^at\s+(?:System\.Reflection\.|System\.RuntimeMethodHandle\.|Xunit\.|Xunit\b|xunit\.)", RegexOptions.IgnoreCase)));
                     result.AddFailure(new Failure(
                         PlaywrightResultParser.Truncate(item.Attribute("testName")?.Value ?? "", 300),
                         location.Success ? PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(location.Groups["file"].Value, workingDirectory), 300) : "",
@@ -174,7 +197,13 @@ public static class TestReportParser
                         "failed", [new ErrorDetail(PlaywrightResultParser.Truncate(message, 500), PlaywrightResultParser.Truncate(stackLines, 2000))]));
                 }
             }
-            return Finish(result, exitCode, null);
+            var report = JsonNode.Parse(Finish(result, exitCode, null))!.AsObject();
+            if (result.Failed > 0 && rerunNames.Count > 0 && result.GlobalErrors.Count == 0)
+            {
+                var filter = string.Join("|", rerunNames.Select(name => "FullyQualifiedName~" + Regex.Replace(name, @"[\\&|=!~]", @"\$0")));
+                report["rerunArgs"] = new JsonArray("--filter", filter);
+            }
+            return report.ToJsonString(JsonDefaults.Options);
         }
         catch (Exception ex) when (ex is XmlException or IOException or InvalidOperationException or FormatException or OverflowException)
         {
@@ -184,12 +213,12 @@ public static class TestReportParser
 
     private static string Finish(Accumulator result, int exitCode, int? noTestsExitCode)
     {
-        int total = result.Passed + result.Failed + result.Skipped;
+        int total = result.Passed + result.Failed + result.Errors + result.Skipped;
         bool noTests = exitCode == 0 || exitCode == noTestsExitCode;
         string status = total == 0
             ? (noTests && result.GlobalErrors.Count == 0 ? "no_tests" : "error")
-            : (exitCode != 0 || result.Failed > 0 || result.GlobalErrors.Count > 0 ? "error" : "success");
-        return SerializeWithLimit(status, exitCode, new Stats(Math.Round(result.Duration, 1), result.Passed, result.Failed, result.Skipped, total), result.GlobalErrors, result.Failures);
+            : (exitCode != 0 || result.Failed > 0 || result.Errors > 0 || result.GlobalErrors.Count > 0 ? "error" : "success");
+        return SerializeWithLimit(status, exitCode, new Stats(Math.Round(result.Duration, 1), result.Passed, result.Failed, result.Skipped, total, result.Errors), result.GlobalErrors, result.Failures);
     }
 
     private static async Task<string> ParseAsync(string reportPath, int exitCode, int? noTestsExitCode, CancellationToken cancellationToken,
@@ -236,7 +265,7 @@ public static class TestReportParser
             }
         }
         return new Failure(PlaywrightResultParser.Truncate(title, 300),
-            PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(file, workingDirectory), 300), line, problem.Name.LocalName,
+            PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(file, workingDirectory), 300), line, problem.Name.LocalName == "error" ? "error" : "failed",
             [new ErrorDetail(PlaywrightResultParser.Truncate(message.Trim(), 500), split.Stack)]);
     }
 

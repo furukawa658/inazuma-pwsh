@@ -44,6 +44,7 @@ $initialSessionState.Variables.Add([System.Management.Automation.Runspaces.Sessi
 $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($initialSessionState)
 $runspace.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
 $runspace.Open()
+$null = $runspace.SessionStateProxy.Path.SetLocation([Environment]::CurrentDirectory)
 try {
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
     [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -127,6 +128,8 @@ try {
             $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($initialSessionState)
             $runspace.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
             $runspace.Open()
+            $null = $runspace.SessionStateProxy.Path.SetLocation([Environment]::CurrentDirectory)
+            $runspace.SessionStateProxy.SetVariable('OutputEncoding', [System.Text.UTF8Encoding]::new($false))
 
             $resObj = @{
                 type = "result"
@@ -138,6 +141,7 @@ try {
                 warnings = @()
                 infoOutputs = @()
                 exitCode = 0
+                location = $runspace.SessionStateProxy.Path.CurrentLocation.Path
             }
             $writer.WriteLine((ConvertTo-Json $resObj -Compress))
             continue
@@ -177,13 +181,12 @@ try {
                 $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($initialSessionState)
                 $runspace.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
                 $runspace.Open()
+                $null = $runspace.SessionStateProxy.Path.SetLocation([Environment]::CurrentDirectory)
             }
 
-            $prevLoc = $null
             if ($workingDirectory) {
                 try {
-                    $prevLoc = $runspace.SessionStateProxy.Path.CurrentLocation.Path
-                    $runspace.SessionStateProxy.Path.SetLocation($workingDirectory)
+                    $null = $runspace.SessionStateProxy.Path.SetLocation($workingDirectory)
                 } catch {
                     $resObj = @{
                         type = "result"
@@ -211,6 +214,7 @@ try {
             $ps = [System.Management.Automation.PowerShell]::Create()
             $ps.Runspace = $runspace
             $null = $ps.AddScript($modScript)
+            $ps.Commands.Commands[0].MergeMyResults([System.Management.Automation.Runspaces.PipelineResultTypes]::Information, [System.Management.Automation.Runspaces.PipelineResultTypes]::Output)
             $outputCollection = [System.Management.Automation.PSDataCollection[psobject]]::new()
 
             $asyncResult = $ps.BeginInvoke[psobject, psobject]($null, $outputCollection)
@@ -230,19 +234,18 @@ try {
             }
 
             $stopped = $false
+            $terminatingError = $null
             try {
                 $null = $ps.EndInvoke($asyncResult)
             } catch [System.Management.Automation.PipelineStoppedException] {
                 $stopped = $true
             } catch {
+                $terminatingError = $ps.InvocationStateInfo.Reason
+                if ($null -eq $terminatingError) { $terminatingError = $_.Exception }
             }
 
             if ($ps.InvocationStateInfo.State -eq [System.Management.Automation.PSInvocationState]::Stopped) {
                 $stopped = $true
-            }
-
-            if ($prevLoc -and $runspace.RunspaceStateInfo.State -eq [System.Management.Automation.Runspaces.RunspaceState]::Opened) {
-                try { $runspace.SessionStateProxy.Path.SetLocation($prevLoc) } catch {}
             }
 
             $errors = [System.Collections.Generic.List[string]]::new()
@@ -254,6 +257,13 @@ try {
                 }
                 $errors.Add($msg)
             }
+            if ($null -ne $terminatingError) {
+                $message = $terminatingError.Message
+                if ($terminatingError.ErrorRecord -and $terminatingError.ErrorRecord.ScriptStackTrace) {
+                    $message += " (at $($terminatingError.ErrorRecord.ScriptStackTrace.Trim()))"
+                }
+                if (-not $errors.Contains($message)) { $errors.Add($message) }
+            }
 
             $warnings = [System.Collections.Generic.List[string]]::new()
             foreach ($warn in $ps.Streams.Warning) {
@@ -262,6 +272,8 @@ try {
                     $warnings.Add($warn.Message)
                 }
             }
+            foreach ($verbose in $ps.Streams.Verbose) { $warnings.Add("VERBOSE: $($verbose.Message)") }
+            foreach ($debug in $ps.Streams.Debug) { $warnings.Add("DEBUG: $($debug.Message)") }
 
             $infoOutputs = [System.Collections.Generic.List[string]]::new()
             foreach ($info in $ps.Streams.Information) {
@@ -283,7 +295,9 @@ try {
             $rawOutputCollection = $outputCollection
             $outputCollection = [System.Collections.Generic.List[psobject]]::new()
             foreach ($item in $rawOutputCollection) {
-                if ($item -is [System.Management.Automation.ErrorRecord]) {
+                if ($item.PSObject.BaseObject -is [System.Management.Automation.InformationRecord]) {
+                    $outputCollection.Add([psobject]$item.PSObject.BaseObject.MessageData.ToString())
+                } elseif ($item -is [System.Management.Automation.ErrorRecord]) {
                     $outputCollection.Add([psobject]$item.ToString())
                 } else {
                     $outputCollection.Add($item)
@@ -294,7 +308,7 @@ try {
             $outputStrings = [System.Collections.Generic.List[string]]::new()
             foreach ($item in $outputCollection) {
                 if ($null -ne $item) {
-                    if ($item.BaseObject -isnot [string]) {
+                    if ($item.PSObject.BaseObject -isnot [string]) {
                         $allStrings = $false
                     }
                     $outputStrings.Add($item.ToString())
@@ -313,9 +327,9 @@ try {
                     $dataIsString = $true
                     $dataString = $infoOutputs -join "`r`n"
                 }
-            } elseif ($outputCollection.Count -eq 1 -and $outputCollection[0].BaseObject -is [string]) {
+            } elseif ($outputCollection.Count -eq 1 -and $outputCollection[0].PSObject.BaseObject -is [string]) {
                 $dataIsString = $true
-                $dataString = [string]$outputCollection[0].BaseObject
+                $dataString = [string]$outputCollection[0].PSObject.BaseObject
             } else {
                 # \u8907\u96d1\u306a.NET\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u6df1\u3044JSON\u306b\u3059\u308b\u3068\u6570MB\u3092\u8d85\u3048\u308b\u305f\u3081\u3001\u8868\u793a\u30c6\u30ad\u30b9\u30c8\u3078\u5909\u63db\u3059\u308b
                 $plainData = $true
@@ -389,6 +403,7 @@ try {
                 dataIsString = $dataIsString
                 dataString = $dataString
                 dataJson = $dataJson
+                location = $runspace.SessionStateProxy.Path.CurrentLocation.Path
             }
 
             $writer.WriteLine((ConvertTo-Json $resObj -Compress))

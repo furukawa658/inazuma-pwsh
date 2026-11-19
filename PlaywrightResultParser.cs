@@ -169,9 +169,9 @@ public static class PlaywrightResultParser
                     if (!string.IsNullOrEmpty(p))
                     {
                         var name = Truncate(att.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "", 150);
-                        var relPath = Truncate(ToRelativePath(p, workingDir), 300);
+                        var absolutePath = Path.GetFullPath(p, workingDir);
                         var ct = Truncate(att.TryGetProperty("contentType", out var c) ? c.GetString() ?? "" : "", 100);
-                        list.Add(new Attachment(name, relPath, ct));
+                        list.Add(new Attachment(name, absolutePath, ct));
                     }
                 }
         }
@@ -211,7 +211,7 @@ public static class PlaywrightResultParser
                     Title = Truncate(f.Title, 150),
                     File = Truncate(f.File, 150),
                     Errors = f.Errors.Select(e => e with { Message = Truncate(e.Message, 200), Stack = ClipLines(e.Stack, 2) }).ToList(),
-                    Attachments = f.Attachments.Take(2).Select(a => a with { Path = Truncate(a.Path, 150) }).ToList()
+                    Attachments = f.Attachments.Take(2).ToList()
                 }).ToList();
                 curG = curG.Select(g => Truncate(g, 200)).ToList();
             }
