@@ -3,4 +3,5 @@ obj/
 artifacts/
 node_modules/
 vscode-extension/server/
+rust/**/target/
 *.vsix
