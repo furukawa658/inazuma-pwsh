@@ -386,50 +386,21 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         result.Remove("output");
         result.Remove("warnings");
 
-        if (result.TryGetPropertyValue("failures", out var fNode) && fNode is JsonArray fArr && fArr.Count > 1)
-        {
-            var first = fArr[0]!.DeepClone();
-            fArr.Clear();
-            fArr.Add(first);
-        }
-        if (result.TryGetPropertyValue("errors", out var eNode) && eNode is JsonArray eArr && eArr.Count > 1)
-        {
-            var first = eArr[0]!.DeepClone();
-            eArr.Clear();
-            eArr.Add(first);
-        }
-        if (result.TryGetPropertyValue("diagnostics", out var dNode) && dNode is JsonArray dArr && dArr.Count > 5)
-            while (dArr.Count > 5) dArr.RemoveAt(dArr.Count - 1);
-        if (result.TryGetPropertyValue("globalErrors", out var gNode) && gNode is JsonArray gArr && gArr.Count > 1)
-        {
-            var first = gArr[0]!.DeepClone();
-            gArr.Clear();
-            gArr.Add(first);
-        }
+        json = DiagnosticBudget.Fit(result, 8000, "failures", "diagnostics", "errors", "warnings", "globalErrors");
+        if (json.Length <= 8000) return json;
+
+        foreach (var arrayName in new[] { "failures", "diagnostics", "errors", "warnings" })
+            if (result[arrayName] is JsonArray { Count: > 0 } items && items[0] is JsonObject first)
+                first.Remove("codeContext");
 
         json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;
 
-        if (result.TryGetPropertyValue("failures", out var fNode2) && fNode2 is JsonArray fArr2 && fArr2.Count > 0 && fArr2[0] is JsonObject fObj)
+        if (result["failures"] is JsonArray { Count: > 0 } failures && failures[0] is JsonObject primaryFailure
+            && primaryFailure["attachments"] is JsonArray attachments)
         {
-            fObj.Remove("attachments");
-            if (fObj.TryGetPropertyValue("errors", out var errNode) && errNode is JsonArray errArr && errArr.Count > 0 && errArr[0] is JsonObject errObj)
-            {
-                errObj.Remove("stack");
-                if (errObj.TryGetPropertyValue("message", out var mNode))
-                {
-                    var m = mNode?.GetValue<string>() ?? "";
-                    if (m.Length > 80) errObj["message"] = string.Concat(m.AsSpan(0, 80), "...");
-                }
-            }
-        }
-        if (result.TryGetPropertyValue("errors", out var eNode2) && eNode2 is JsonArray eArr2 && eArr2.Count > 0 && eArr2[0] is JsonObject eObj)
-        {
-            if (eObj.TryGetPropertyValue("message", out var emNode))
-            {
-                var em = emNode?.GetValue<string>() ?? "";
-                if (em.Length > 80) eObj["message"] = string.Concat(em.AsSpan(0, 80), "...");
-            }
+            primaryFailure["omittedAttachments"] = attachments.Count;
+            primaryFailure.Remove("attachments");
         }
 
         json = result.ToJsonString(JsonDefaults.Options);

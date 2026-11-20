@@ -21,6 +21,10 @@ internal static partial class TscReportParser
         static string Key(string? file, int line, int column, string? code, string? message) => $"{file}|{line}|{column}|{code}|{message}";
         var listed = array.OfType<System.Text.Json.Nodes.JsonObject>().Select(item => Key(item["file"]?.GetValue<string>(),
             item["line"]?.GetValue<int>() ?? 0, item["column"]?.GetValue<int>() ?? 0, item["code"]?.GetValue<string>(), item["message"]?.GetValue<string>())).ToHashSet();
+        var summarized = array.OfType<System.Text.Json.Nodes.JsonObject>()
+            .Where(item => item["summary"] != null)
+            .Select(item => $"{item["file"]?.GetValue<string>()}|{item["line"]?.GetValue<int>() ?? 0}|{item["column"]?.GetValue<int>() ?? 0}|{item["code"]?.GetValue<string>()}")
+            .ToHashSet();
 
         var lines = output.Split('\n');
         var owner = new int[lines.Length];
@@ -44,8 +48,13 @@ internal static partial class TscReportParser
                 found[^1] = found[^1] with { Message = found[^1].Message + " " + text.Trim() };
             }
         }
-        // A truncated path or message does not equal the listed one, so its lines stay.
-        bool IsListed(Diagnostic d) => listed.Contains(Key(d.File == null ? null : PlaywrightResultParser.ToRelativePath(d.File, workingDirectory), d.Line, d.Column, d.Code, d.Message));
+        // A truncated path or message does not equal the listed one, so its lines stay unless a compact summary identifies the diagnostic location and code.
+        bool IsListed(Diagnostic d)
+        {
+            var file = d.File == null ? null : PlaywrightResultParser.ToRelativePath(d.File, workingDirectory);
+            return listed.Contains(Key(file, d.Line, d.Column, d.Code, d.Message))
+                || summarized.Contains($"{file}|{d.Line}|{d.Column}|{d.Code}");
+        }
         var remaining = string.Join('\n', lines.Where((_, index) => owner[index] < 0 ||
             (!(previous?.Contains(BaselineKey(found[owner[index]])) ?? false) && (!compact || !IsListed(found[owner[index]])))));
         return string.IsNullOrWhiteSpace(remaining) ? "" : remaining;
@@ -92,7 +101,7 @@ internal static partial class TscReportParser
             code = d.Code,
             message = PlaywrightResultParser.Truncate(d.Message, MaxMessageChars)
         }).ToList();
-        return System.Text.Json.JsonSerializer.Serialize(new
+        var report = System.Text.Json.JsonSerializer.Serialize(new
         {
             status,
             exitCode,
@@ -103,6 +112,7 @@ internal static partial class TscReportParser
             diagnostics = shown,
             omitted = Math.Max(0, listed.Count - MaxDiagnostics)
         }, JsonDefaults.OptionsIgnoreNull);
+        return DiagnosticBudget.Fit(report, 5500, "diagnostics");
     }
 
     private static string BaselineKey(Diagnostic diagnostic) => $"{diagnostic.File}|{diagnostic.Code}|{diagnostic.Message}";

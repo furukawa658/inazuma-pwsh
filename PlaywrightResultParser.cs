@@ -199,54 +199,8 @@ public static class PlaywrightResultParser
 
     private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures)
     {
-        var curF = failures;
-        var curG = globalErrors;
-        for (int i = 0; i < 4; i++)
-        {
-            var json = JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, curG, curF), JsonOptions);
-            if (json.Length <= 5500) return json;
-            if (i == 0)
-            {
-                curF = curF.Select(f => f with {
-                    Title = Truncate(f.Title, 150),
-                    File = Truncate(f.File, 150),
-                    Errors = f.Errors.Select(e => e with { Message = Truncate(e.Message, 200), Stack = ClipLines(e.Stack, 2) }).ToList(),
-                    Attachments = f.Attachments.Take(2).ToList()
-                }).ToList();
-                curG = curG.Select(g => Truncate(g, 200)).ToList();
-            }
-            else if (i == 1)
-            {
-                curF = curF.Take(3).Select(f => f with {
-                    Title = Truncate(f.Title, 100),
-                    File = Truncate(f.File, 100),
-                    Errors = f.Errors.Take(2).Select(e => e with { Message = Truncate(e.Message, 150), Stack = ClipLines(e.Stack, 1) }).ToList(),
-                    Attachments = f.Attachments.Take(1).ToList()
-                }).ToList();
-                curG = curG.Take(2).Select(g => Truncate(g, 150)).ToList();
-            }
-            else if (i == 2)
-            {
-                curF = curF.Take(2).Select(f => f with {
-                    Title = Truncate(f.Title, 80),
-                    File = Truncate(f.File, 80),
-                    Errors = f.Errors.Take(1).Select(e => e with { Message = Truncate(e.Message, 100), Stack = "" }).ToList(),
-                    Attachments = []
-                }).ToList();
-                curG = curG.Take(1).Select(g => Truncate(g, 100)).ToList();
-            }
-            else
-            {
-                curF = curF.Take(1).Select(f => f with {
-                    Title = Truncate(f.Title, 40),
-                    File = Truncate(f.File, 50),
-                    Errors = f.Errors.Take(1).Select(e => e with { Message = Truncate(e.Message, 50), Stack = "" }).ToList(),
-                    Attachments = []
-                }).ToList();
-                curG = curG.Take(1).Select(g => Truncate(g, 50)).ToList();
-            }
-        }
-        return JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, curG, curF), JsonOptions);
+        var report = JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, globalErrors, failures), JsonOptions);
+        return DiagnosticBudget.Fit(report, 5500, "failures", "globalErrors");
     }
 
     internal static string ClipLines(string? str, int maxLines) => string.IsNullOrEmpty(str) ? "" : string.Join("\n", str.Split('\n').Take(maxLines));

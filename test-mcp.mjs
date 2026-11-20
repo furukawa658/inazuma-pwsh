@@ -792,12 +792,39 @@ process.exitCode = 1;
         assert.equal(giant.status, 'error', JSON.stringify(giant));
         assert.equal(giant.exitCode, 1);
         assert.ok(giant.failures?.length > 0, 'failures must contain primary diagnosis');
+        assert.equal(giant.failures[0].omittedAttachments, 2);
         assert.ok(giant.fullLogPath, 'fullLogPath must exist');
         if (giant.fullReportPath) {
-            assert.ok((await stat(giant.fullReportPath)).size > 0);
+            const fullReport = JSON.parse(await readFile(giant.fullReportPath, 'utf8'));
+            assert.equal(fullReport.failures[0].attachments.length, 2);
             await rm(giant.fullReportPath);
         }
         await rm(giant.fullLogPath);
+    });
+    await check('diagnostic budget keeps the first failure detailed and summarizes later failures', async () => {
+        const project = path.join(fixture, 'vitest-budget');
+        const cliDirectory = path.join(project, 'node_modules', 'vitest');
+        await mkdir(cliDirectory, { recursive: true });
+        const spec = path.join(project, 'sample.spec.ts').replaceAll('\\', '/');
+        const stackFrames = index => Array.from({ length: 4 }, (_, frame) => `    at frame${index}-${frame} (${spec}:${index + 1}:${frame + 1}) ${'S'.repeat(240)}`).join('\n');
+        const failures = Array.from({ length: 10 }, (_, index) => ({
+            fullName: `primary failure ${index}`,
+            status: 'failed',
+            failureMessages: [`AssertionError: ${index === 0 ? 'D'.repeat(500) : 'later failure ' + 'E'.repeat(400)}\n${stackFrames(index)}`]
+        }));
+        const payload = { success: false, startTime: 1000, testResults: [{
+            name: spec, status: 'failed', message: '', endTime: 1250,
+            assertionResults: failures
+        }] };
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const out = process.argv.find(a => a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify(${JSON.stringify(payload)})); process.exitCode = 1;`);
+        const result = await tool('run_vitest', { workingDirectory: project });
+        assert.ok(JSON.stringify(result).length <= 8000, `response exceeded 8000 chars: ${JSON.stringify(result).length}`);
+        assert.equal(result.failures.length, 10, JSON.stringify(result));
+        assert.ok(result.failures[0].errors[0].stack.length > 800, 'first stack must remain detailed');
+        assert.equal(result.failures[0].summary, undefined);
+        assert.ok(result.failures.slice(1).every(failure => failure.summary && failure.errors === undefined && failure.stack === undefined), JSON.stringify(result.failures.slice(1)));
+        assert.match(result.failures[1].summary, /sample\.spec\.ts:2/);
+        await rm(result.fullLogPath);
     });
     await check('Vitest JSON failures, file errors and managed reporter', async () => {
         const project = path.join(fixture, 'vitest');
@@ -969,7 +996,10 @@ process.exitCode = 1;
         assert.equal(failed.diagnostics[0].column, 7);
         assert.equal(failed.diagnostics[0].code, 'TS2322');
         assert.match(failed.diagnostics[0].codeContext, /^>1\| const a: number = "x";\n 2\| const b = 1;$/);
-        assert.ok(failed.diagnostics.every(item => item.message.length <= 323));
+        assert.ok(failed.diagnostics[0].message.length <= 323);
+        assert.equal(failed.diagnostics[0].summary, undefined);
+        assert.ok(failed.diagnostics.slice(1).every(item => item.summary && item.message === undefined), JSON.stringify(failed.diagnostics.slice(1)));
+        assert.match(failed.diagnostics[1].summary, /src\/f0\.ts:1/);
         assert.ok(JSON.stringify(failed).length <= 8000);
         await rm(failed.fullLogPath);
 
