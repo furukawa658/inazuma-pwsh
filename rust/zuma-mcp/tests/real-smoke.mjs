@@ -130,7 +130,7 @@ try {
   }, 200000);
   await rm(buildProject, { recursive: true, force: true });
   assert.equal(build.status, 'success', JSON.stringify(build));
-  console.log('REAL_SMOKE_OK tools=16 parallel=true cancellation=true dotnet_build=success');
+  console.log('REAL_SMOKE_OK tools=17 parallel=true cancellation=true dotnet_build=success');
 } finally {
   child.stdin.end();
   child.kill();
