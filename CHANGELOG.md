@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- Fix the Windows Rust MCP front end so `read_section.ranges` declares its array item schema and VS Code can validate all registered tools.
+
 ## 0.8.1
 
 - Fix Linux and macOS Marketplace packaging by invoking the PATH-provided `npx` without a shell while retaining direct npm CLI invocation on Windows.
