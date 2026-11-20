@@ -10,7 +10,8 @@ internal static class EslintReportParser
 
     private sealed record Diagnostic(string File, int Line, int Column, string? Rule, bool IsError, string Message);
 
-    public static async Task<string> ParseAsync(string reportPath, string workingDirectory, int exitCode, CancellationToken cancellationToken)
+    public static async Task<(string Report, HashSet<string>? Baseline)> ParseAsync(string reportPath, string workingDirectory, int exitCode,
+        CancellationToken cancellationToken, IReadOnlySet<string>? previous = null)
     {
         var diagnostics = new List<Diagnostic>();
         var valid = false;
@@ -45,8 +46,10 @@ internal static class EslintReportParser
 
         var errorCount = diagnostics.Count(d => d.IsError);
         var status = !valid ? (exitCode == 0 ? "report_unavailable" : "error") : exitCode == 0 && errorCount == 0 ? "success" : "error";
-        var listed = diagnostics.OrderByDescending(d => d.IsError).ToList();
-        return JsonSerializer.Serialize(new
+        var ordered = diagnostics.OrderByDescending(d => d.IsError).ToList();
+        var current = valid ? ordered.Select(BaselineKey).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+        var listed = previous == null ? ordered : ordered.Where(diagnostic => !previous.Contains(BaselineKey(diagnostic))).ToList();
+        var report = JsonSerializer.Serialize(new
         {
             status,
             exitCode,
@@ -63,9 +66,14 @@ internal static class EslintReportParser
                 severity = d.IsError ? "error" : "warning",
                 message = PlaywrightResultParser.Truncate(d.Message, 300)
             }).ToList(),
-            omitted = Math.Max(0, listed.Count - MaxDiagnostics)
+            omitted = Math.Max(0, listed.Count - MaxDiagnostics),
+            newCount = previous == null ? (int?)null : listed.Count,
+            fixedCount = previous == null || current == null ? (int?)null : previous.Count(key => !current.Contains(key))
         }, JsonDefaults.OptionsIgnoreNull);
+        return (report, current);
     }
+
+    private static string BaselineKey(Diagnostic diagnostic) => $"{(diagnostic.IsError ? "error" : "warning")}|{diagnostic.File}|{diagnostic.Rule}|{diagnostic.Message}";
 
     private static string Text(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";

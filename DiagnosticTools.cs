@@ -12,13 +12,17 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     private const string ContextLinesText = "Number of source lines (0 to 10) shown before and after each failure location as codeContext. 0 omits it. A line already shown for an earlier item of the same file is not repeated.";
     private const string CompactResponseText = "When true (default), omit output lines already represented in structured fields. Set false to retain raw output.";
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> TscBaselines = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> DotnetBuildBaselines = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> EslintBaselines = new();
 
     [McpServerTool(Name = "run_dotnet_build")]
     [Description("Run dotnet build and return concise SARIF diagnostics and the exit code. The full log is saved to fullLogPath. Diagnostics for different projects are written to separate files.")]
     public Task<string> RunDotnetBuildAsync(
         [Description("Absolute path to the working directory.") ] string workingDirectory,
         [Description("Optional project or solution path, not a command string.") ] string? target = null,
-        bool includeWarnings = false, int timeoutSeconds = 120, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
+        bool includeWarnings = false,
+        [Description("When true, list only diagnostics absent from the previous run with the same workingDirectory, target, and warning setting in this server process, and add newCount and fixedCount.")] bool onlyNew = false,
+        int timeoutSeconds = 120, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_dotnet_build", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
             var propsPath = Path.Combine(directory, "diagnostics.props");
@@ -33,8 +37,11 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             }
             arguments.AddRange(["--nologo", "-v:q", $"-p:CustomAfterMicrosoftCommonTargets={propsPath}"]);
             var execution = await NativeProcessRunner.RunAsync("dotnet", arguments, workingDirectory, timeoutSeconds, null, token);
-            var report = await DotnetBuildParser.ParseAsync(directory, workingDirectory, execution.ExitCode, includeWarnings, token, execution.FullLogPath);
-            return await CombineAsync("run_dotnet_build", report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
+            var baselineKey = workingDirectory + "\n" + (target ?? "") + "\n" + includeWarnings;
+            DotnetBuildBaselines.TryGetValue(baselineKey, out var previous);
+            var parsed = await DotnetBuildParser.ParseAsync(directory, workingDirectory, execution.ExitCode, includeWarnings, token, execution.FullLogPath, onlyNew ? previous : null);
+            if (execution.Status == "completed" && parsed.Baseline != null) UpdateBaseline(DotnetBuildBaselines, baselineKey, parsed.Baseline);
+            return await CombineAsync("run_dotnet_build", parsed.Report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_dotnet_test")]
@@ -177,11 +184,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var baselineKey = workingDirectory + "\n" + string.Join("\n", tscArgs ?? []);
             TscBaselines.TryGetValue(baselineKey, out var previous);
             var report = TscReportParser.Parse(execution.FullLogPath, workingDirectory, execution.ExitCode, onlyNew ? previous : null, out var current);
-            if (execution.Status == "completed" && current != null)
-            {
-                if (TscBaselines.Count >= 20 && !TscBaselines.ContainsKey(baselineKey)) TscBaselines.Clear();
-                TscBaselines[baselineKey] = current;
-            }
+            if (execution.Status == "completed" && current != null) UpdateBaseline(TscBaselines, baselineKey, current);
             return await CombineAsync("run_tsc", report, execution, workingDirectory, contextLines,
                 trimOutput: (output, result) => TscReportParser.WithoutListed(output, result, workingDirectory, onlyNew ? previous : null, compactResponse), compactResponse: compactResponse);
         }, cancellationToken);
@@ -190,6 +193,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     [Description("Run a locally installed ESLint and return error and warning counts, per-rule counts and the first 15 problems (errors first) from its JSON report. Dependencies are not installed automatically.")]
     public Task<string> RunEslintAsync(string workingDirectory,
         [Description("Arguments passed to eslint, with each argument as a separate array element, for example src or --quiet. Defaults to the current directory.") ] string[]? eslintArgs = null,
+        [Description("When true, list only diagnostics absent from the previous run with the same workingDirectory and eslintArgs in this server process, and add newCount and fixedCount.")] bool onlyNew = false,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_eslint", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
@@ -202,8 +206,11 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             arguments.AddRange(["--format", "json", "--output-file", reportPath]);
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["NO_COLOR"] = "1" }, token);
-            var report = await EslintReportParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, token);
-            return await CombineAsync("run_eslint", report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
+            var baselineKey = workingDirectory + "\n" + string.Join("\n", eslintArgs ?? []);
+            EslintBaselines.TryGetValue(baselineKey, out var previous);
+            var parsed = await EslintReportParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, token, onlyNew ? previous : null);
+            if (execution.Status == "completed" && parsed.Baseline != null) UpdateBaseline(EslintBaselines, baselineKey, parsed.Baseline);
+            return await CombineAsync("run_eslint", parsed.Report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
         }, cancellationToken);
 
     [McpServerTool(Name = "run_affected_tests")]
@@ -374,6 +381,13 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             if (File.Exists(venvPython)) return venvPython;
         }
         return "python";
+    }
+
+    private static void UpdateBaseline(System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> baselines,
+        string key, HashSet<string> current)
+    {
+        if (baselines.Count >= 20 && !baselines.ContainsKey(key)) baselines.Clear();
+        baselines[key] = current;
     }
 
     private static bool UsesTestingPlatform(string workingDirectory)

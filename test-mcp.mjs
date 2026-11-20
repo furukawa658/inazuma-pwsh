@@ -690,6 +690,27 @@ try {
         await rm(failed.fullLogPath);
         await rm(success.fullLogPath);
     });
+    await check('run_dotnet_build onlyNew lists newly introduced diagnostics', async () => {
+        const project = path.join(fixture, 'build-diff');
+        await mkdir(project);
+        await writeFile(path.join(project, 'Probe.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType></PropertyGroup></Project>');
+        const source = path.join(project, 'Program.cs');
+        await writeFile(source, 'MissingThing();');
+        const first = await tool('run_dotnet_build', { workingDirectory: project, onlyNew: true });
+        assert.deepEqual([first.summary.totalErrors, first.errors.length, first.newCount, first.fixedCount], [1, 1, undefined, undefined], JSON.stringify(first));
+
+        await writeFile(source, '\n\nMissingThing();');
+        await writeFile(path.join(project, 'Other.cs'), 'class Other { void Run() { MissingOther(); } }');
+        const second = await tool('run_dotnet_build', { workingDirectory: project, onlyNew: true });
+        assert.equal(second.summary.totalErrors, 2, JSON.stringify(second));
+        assert.equal(second.newCount, 1, JSON.stringify(second));
+        assert.equal(second.fixedCount, 0, JSON.stringify(second));
+        assert.ok(second.errors.some(item => item.ruleId === 'CS0103' && item.path.endsWith('Other.cs')), JSON.stringify(second));
+        assert.ok(second.errors.every(item => !item.path.endsWith('Program.cs')), JSON.stringify(second));
+        assert.equal(first.summary.totalErrors, 1);
+        await rm(first.fullLogPath);
+        await rm(second.fullLogPath);
+    });
     await check('Playwright global error and nonzero exit never succeed', async () => {
         const project = path.join(fixture, 'playwright');
         const cliDirectory = path.join(project, 'node_modules', 'playwright');
@@ -1178,7 +1199,7 @@ process.exitCode = 1;
         await mkdir(path.join(project, 'src'));
         await writeFile(path.join(project, 'src', 'a.js'), 'const x = 1;\ny();\n???\n');
         const mock = path.join(binDirectory, 'eslint.js');
-        const script = (payload, exitCode) => `const fs=require('node:fs'); const a=process.argv; if (a[2] !== '.' || a[a.indexOf('--format') + 1] !== 'json') process.exit(9); fs.writeFileSync(a[a.indexOf('--output-file') + 1], JSON.stringify(${JSON.stringify(payload)})); process.exitCode=${exitCode};`;
+        const script = (payload, exitCode) => `const fs=require('node:fs'); const a=process.argv; if (!['.','src'].includes(a[2]) || a[a.indexOf('--format') + 1] !== 'json') process.exit(9); fs.writeFileSync(a[a.indexOf('--output-file') + 1], JSON.stringify(${JSON.stringify(payload)})); process.exitCode=${exitCode};`;
         await writeFile(mock, script([{ filePath: path.join(project, 'src', 'a.js'), messages: [
             { ruleId: 'no-unused-vars', severity: 1, message: 'x is unused', line: 1, column: 7 },
             { ruleId: 'no-undef', severity: 2, message: 'y is not defined', line: 2, column: 1 },
@@ -1192,6 +1213,22 @@ process.exitCode = 1;
         assert.match(failed.diagnostics[0].file, /^src[\\/]a\.js$/);
         assert.equal(failed.diagnostics[0].codeContext, ' 1| const x = 1;\n>2| y();\n 3| ???');
         await rm(failed.fullLogPath);
+
+        await writeFile(mock, script([{ filePath: path.join(project, 'src', 'a.js'), messages: [
+            { ruleId: 'no-undef', severity: 2, message: 'y is not defined', line: 7, column: 1 },
+            { ruleId: 'no-unused-vars', severity: 1, message: 'z is unused', line: 8, column: 7 }
+        ] }], 1));
+        const first = await tool('run_eslint', { workingDirectory: project, eslintArgs: ['src'], onlyNew: true });
+        assert.deepEqual([first.errorCount, first.warningCount, first.newCount, first.fixedCount], [1, 1, undefined, undefined]);
+        await writeFile(mock, script([{ filePath: path.join(project, 'src', 'a.js'), messages: [
+            { ruleId: 'no-undef', severity: 2, message: 'y is not defined', line: 12, column: 1 },
+            { ruleId: 'semi', severity: 2, message: 'Missing semicolon', line: 13, column: 20 }
+        ] }], 1));
+        const second = await tool('run_eslint', { workingDirectory: project, eslintArgs: ['src'], onlyNew: true });
+        assert.deepEqual([second.errorCount, second.newCount, second.fixedCount], [2, 1, 1], JSON.stringify(second));
+        assert.deepEqual(second.diagnostics.map(item => item.rule), ['semi']);
+        await rm(first.fullLogPath);
+        await rm(second.fullLogPath);
 
         await writeFile(mock, script([], 0));
         const success = await tool('run_eslint', { workingDirectory: project });
