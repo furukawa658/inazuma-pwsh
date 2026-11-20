@@ -294,7 +294,7 @@ try {
         } finally { child.stdin.end(); child.kill(); }
     });
     await check('public tool descriptions are in English', async () => {
-        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
+        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'run_affected_tests', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
             assert.ok(definition?.description, `${name} is missing a description`);
             assert.match(definition.description, /^[\x00-\x7f]+$/, `${name} description is not English`);
@@ -1088,6 +1088,51 @@ process.exitCode = 1;
         await rm(malformed.fullLogPath);
         assert.match((await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['--logger', 'html'] })).message, /managed by this tool/);
     });
+    await check('run_affected_tests selects imported Vitest tests from git changes', async () => {
+        const project = path.join(fixture, 'affected-tests');
+        const cliDirectory = path.join(project, 'node_modules', 'vitest');
+        const marker = path.join(fixture, 'affected-selected-tests.txt');
+        await mkdir(path.join(project, 'src'), { recursive: true });
+        await mkdir(path.join(project, 'tests'), { recursive: true });
+        await mkdir(cliDirectory, { recursive: true });
+        assert.equal(spawnSync('git', ['init', '-q', project]).status, 0);
+        await writeFile(path.join(project, 'package.json'), JSON.stringify({ devDependencies: { vitest: '1.0.0' } }));
+        await writeFile(path.join(project, 'src', 'math.ts'), 'export const add = (a: number, b: number) => a + b;\n');
+        await writeFile(path.join(project, 'tests', 'math.spec.ts'), "import { add } from '../src/math';\nvoid add;\n");
+        await writeFile(path.join(project, 'tests', 'other.spec.ts'), "import { value } from '../src/other';\nvoid value;\n");
+        await writeFile(path.join(project, 'src', 'other.ts'), 'export const value = 1;\n');
+        await writeFile(path.join(cliDirectory, 'vitest.mjs'), `import fs from 'node:fs'; const args=process.argv.slice(3); fs.writeFileSync(${JSON.stringify(marker)}, args.join('\\n')); const out=process.argv.find(a=>a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify({success:true,testResults:[{name:args[0],status:'passed',assertionResults:[{fullName:'affected',status:'passed',failureMessages:[]}]}]}));`);
+        assert.equal(spawnSync('git', ['-C', project, 'add', '.']).status, 0);
+        assert.equal(spawnSync('git', ['-C', project, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'initial']).status, 0);
+        await writeFile(path.join(project, 'src', 'math.ts'), 'export const add = (a: number, b: number) => a + b + 0;\n');
+
+        const response = await tool('run_affected_tests', { workingDirectory: project });
+        assert.equal(response.status, 'success', JSON.stringify(response));
+        assert.deepEqual(response.changedFiles, ['src/math.ts']);
+        assert.deepEqual(response.selectedTests.map(item => item.file), ['tests/math.spec.ts']);
+        assert.equal((await readFile(marker, 'utf8')).split(/\r?\n/)[0], 'tests/math.spec.ts');
+        assert.doesNotMatch(await readFile(marker, 'utf8'), /other\.spec\.ts/);
+
+        await writeFile(path.join(project, 'src', 'math.ts'), 'export const add = (a: number, b: number) => a + b;\n');
+        const untrackedTest = path.join(project, 'tests', 'new.spec.ts');
+        await writeFile(untrackedTest, 'export {};\n');
+        const untracked = await tool('run_affected_tests', { workingDirectory: project });
+        assert.deepEqual(untracked.changedFiles, ['tests/new.spec.ts']);
+        assert.deepEqual(untracked.selectedTests.map(item => item.file), ['tests/new.spec.ts']);
+        assert.equal((await readFile(marker, 'utf8')).split(/\r?\n/)[0], 'tests/new.spec.ts');
+
+        await rm(untrackedTest);
+        const unchanged = await tool('run_affected_tests', { workingDirectory: project });
+        assert.equal(unchanged.status, 'no_tests', JSON.stringify(unchanged));
+        assert.deepEqual(unchanged.selectedTests, []);
+
+        await writeFile(path.join(project, 'A.csproj'), '<Project />');
+        await writeFile(path.join(project, 'B.csproj'), '<Project />');
+        await writeFile(path.join(project, 'tests', 'AmbiguousTests.cs'), 'public class AmbiguousTests {}\n');
+        const ambiguous = await tool('run_affected_tests', { workingDirectory: project });
+        assert.equal(ambiguous.status, 'error', JSON.stringify(ambiguous));
+        assert.match(ambiguous.message, /Multiple \.csproj files/);
+    });
     await check('same-cause failures are grouped and rerunArgs lists the failing files', async () => {
         const project = path.join(fixture, 'group');
         const cliDirectory = path.join(project, 'node_modules', 'vitest');
@@ -1571,7 +1616,11 @@ process.exitCode = 1;
 } finally {
     for (const entry of pending.values()) clearTimeout(entry.timer);
     server.stdin.end();
-    if (server.exitCode === null) server.kill();
-    await rm(fixture, { recursive: true, force: true });
+    if (server.exitCode === null) {
+        const exited = new Promise(resolve => server.once('exit', resolve));
+        server.kill();
+        await exited;
+    }
+    await rm(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
 
