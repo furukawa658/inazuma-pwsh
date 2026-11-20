@@ -294,7 +294,7 @@ try {
         } finally { child.stdin.end(); child.kill(); }
     });
     await check('public tool descriptions are in English', async () => {
-        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'run_affected_tests', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
+        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'run_affected_tests', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'run_cargo_check', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
             assert.ok(definition?.description, `${name} is missing a description`);
             assert.match(definition.description, /^[\x00-\x7f]+$/, `${name} description is not English`);
@@ -1242,6 +1242,50 @@ process.exitCode = 1;
         for (const argument of ['--format', '-f', '--output-file', '-o'])
             assert.match((await tool('run_eslint', { workingDirectory: project, eslintArgs: [argument] })).message, /managed by this tool/);
         assert.equal((await tool('run_eslint', { workingDirectory: fixture })).status, 'error');
+    });
+    await check('run_cargo_check parses diagnostics and onlyNew', async () => {
+        if (spawnSync('cargo', ['--version'], { stdio: 'ignore' }).status !== 0) return;
+        const project = path.join(fixture, 'cargo-check');
+        await mkdir(path.join(project, 'src'), { recursive: true });
+        await writeFile(path.join(project, 'Cargo.toml'), '[package]\nname = "zuma-cargo-check-fixture"\nversion = "0.1.0"\nedition = "2024"\n');
+        const source = path.join(project, 'src', 'main.rs');
+        await writeFile(source, 'fn main() { missing(); }\n');
+
+        const first = await tool('run_cargo_check', { workingDirectory: project, onlyNew: true });
+        assert.equal(first.status, 'error', JSON.stringify(first));
+        assert.equal(first.errorCount, 1);
+        assert.equal(first.diagnostics[0].code, 'E0425');
+        assert.match(first.diagnostics[0].file, /src[\\/]main\.rs$/);
+        assert.equal(first.diagnostics[0].line, 1);
+        assert.equal(first.newCount, undefined);
+        assert.equal(first.fixedCount, undefined);
+        const raw = await tool('run_cargo_check', { workingDirectory: project, compactResponse: false });
+        assert.match(raw.output, /"reason":"compiler-message"/);
+        assert.match(raw.output, /E0425/);
+        await rm(raw.fullLogPath);
+
+        await writeFile(source, '\n\nfn main() {\n    missing();\n    let value: i32 = "wrong";\n    let _ = value;\n}\n');
+        const second = await tool('run_cargo_check', { workingDirectory: project, onlyNew: true, contextLines: 1 });
+        assert.equal(second.errorCount, 2, JSON.stringify(second));
+        assert.equal(second.newCount, 1, JSON.stringify(second));
+        assert.equal(second.fixedCount, 0, JSON.stringify(second));
+        assert.deepEqual(second.diagnostics.map(item => item.code), ['E0308']);
+        assert.match(second.diagnostics[0].codeContext, /let value: i32 = "wrong";/);
+        assert.doesNotMatch(second.output ?? '', /E0425|E0308/);
+        await rm(first.fullLogPath);
+        await rm(second.fullLogPath);
+
+        await writeFile(source, 'fn main() { let unused = 1; }\n');
+        const warning = await tool('run_cargo_check', { workingDirectory: project });
+        assert.equal(warning.status, 'success', JSON.stringify(warning));
+        assert.equal(warning.errorCount, 0);
+        assert.equal(warning.warningCount, 1);
+        assert.equal(warning.diagnostics[0].code, 'unused_variables');
+        assert.equal(warning.diagnostics[0].severity, 'warning');
+        await rm(warning.fullLogPath);
+
+        for (const argument of ['--message-format=json', '--color=never'])
+            assert.match((await tool('run_cargo_check', { workingDirectory: project, cargoArgs: [argument] })).message, /managed by this tool/);
     });
     await check('search_files returns bounded per-file matches', async () => {
         const project = path.join(fixture, 'search');

@@ -62,9 +62,10 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 17);
+  assert.equal(tools.result.tools.length, 18);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
+  assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
 
   const callTool = async (name, args, timeoutMs) => {
     const response = await request('tools/call', { name, arguments: args }, timeoutMs).response;
@@ -130,7 +131,7 @@ try {
   }, 200000);
   await rm(buildProject, { recursive: true, force: true });
   assert.equal(build.status, 'success', JSON.stringify(build));
-  console.log('REAL_SMOKE_OK tools=17 parallel=true cancellation=true dotnet_build=success');
+  console.log('REAL_SMOKE_OK tools=18 parallel=true cancellation=true dotnet_build=success');
 } finally {
   child.stdin.end();
   child.kill();

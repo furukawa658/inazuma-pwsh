@@ -14,6 +14,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> TscBaselines = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> DotnetBuildBaselines = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> EslintBaselines = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> CargoCheckBaselines = new();
 
     [McpServerTool(Name = "run_dotnet_build")]
     [Description("Run dotnet build and return concise SARIF diagnostics and the exit code. The full log is saved to fullLogPath. Diagnostics for different projects are written to separate files.")]
@@ -187,6 +188,37 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             if (execution.Status == "completed" && current != null) UpdateBaseline(TscBaselines, baselineKey, current);
             return await CombineAsync("run_tsc", report, execution, workingDirectory, contextLines,
                 trimOutput: (output, result) => TscReportParser.WithoutListed(output, result, workingDirectory, onlyNew ? previous : null, compactResponse), compactResponse: compactResponse);
+        }, cancellationToken);
+
+    [McpServerTool(Name = "run_cargo_check")]
+    [Description("Run cargo check and return structured Rust compiler diagnostics with counts, file, line, column, code, severity, and message. Dependencies are not installed automatically.")]
+    public Task<string> RunCargoCheckAsync(string workingDirectory,
+        [Description("Arguments passed to cargo check, with each argument as a separate array element.")] string[]? cargoArgs = null,
+        [Description("When true, list only diagnostics absent from the previous run with the same workingDirectory and cargoArgs in this server process, and add newCount and fixedCount.")] bool onlyNew = false,
+        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true,
+        CancellationToken cancellationToken = default) =>
+        RunAsync("run_cargo_check", workingDirectory, timeoutSeconds, async (_, token) =>
+        {
+            RejectManagedArguments(cargoArgs, "--message-format", "--color");
+            var arguments = new List<string> { "check" };
+            arguments.AddRange(cargoArgs ?? []);
+            arguments.AddRange(["--message-format=json", "--color=never", "--quiet"]);
+            var execution = await NativeProcessRunner.RunAsync("cargo", arguments, workingDirectory, timeoutSeconds, null, token, separateStdoutLog: true);
+            try
+            {
+                var baselineKey = workingDirectory + "\n" + string.Join("\n", cargoArgs ?? []);
+                CargoCheckBaselines.TryGetValue(baselineKey, out var previous);
+                var reportPath = execution.StdoutLogPath ?? execution.FullLogPath;
+                var report = CargoCheckParser.Parse(reportPath, workingDirectory, execution.ExitCode, onlyNew ? previous : null, out var current);
+                if (execution.Status == "completed" && current != null) UpdateBaseline(CargoCheckBaselines, baselineKey, current);
+                return await CombineAsync("run_cargo_check", report, execution, workingDirectory, contextLines,
+                    trimOutput: (output, _) => compactResponse ? CargoCheckParser.WithoutCompilerMessages(output) : output, compactResponse: compactResponse);
+            }
+            finally
+            {
+                if (execution.StdoutLogPath != null)
+                    try { File.Delete(execution.StdoutLogPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
         }, cancellationToken);
 
     [McpServerTool(Name = "run_eslint")]
