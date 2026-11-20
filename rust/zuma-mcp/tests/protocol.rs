@@ -66,6 +66,10 @@ fn array_tool_parameters_define_items() {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
         assert_eq!(tool["inputSchema"]["properties"]["onlyNew"]["type"], "boolean");
     }
+    for name in ["run_dotnet_test", "run_playwright", "run_bun_test", "run_pytest", "run_vitest"] {
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["regressionsOnly"]["type"], "boolean");
+    }
     for tool in tools {
         for (name, schema) in tool["inputSchema"]["properties"].as_object().unwrap() {
             if schema["type"] == "array" {

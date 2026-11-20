@@ -15,6 +15,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> DotnetBuildBaselines = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> EslintBaselines = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> CargoCheckBaselines = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> TestBaselines = new();
 
     [McpServerTool(Name = "run_dotnet_build")]
     [Description("Run dotnet build and return concise SARIF diagnostics and the exit code. The full log is saved to fullLogPath. Diagnostics for different projects are written to separate files.")]
@@ -49,6 +50,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     [Description("Run dotnet test and return failures and counts from its TRX reports. Uses VSTest options, or Microsoft.Testing.Platform options when global.json selects that runner (the test project then needs the TRX report extension). Dependencies are not installed automatically.")]
     public Task<string> RunDotnetTestAsync(string workingDirectory,
         [Description("Arguments passed to dotnet test, with each argument as a separate array element, for example a project path or --filter.") ] string[]? testArgs = null,
+        [Description("When true, keep only tests that passed in the previous run with the same arguments and failed in this run.")] bool regressionsOnly = false,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_dotnet_test", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
@@ -62,6 +64,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
                 new Dictionary<string, string> { ["DOTNET_CLI_UI_LANGUAGE"] = "en", ["DOTNET_NOLOGO"] = "1" }, token);
             var report = await TestReportParser.ParseTrxAsync(directory, workingDirectory, execution.ExitCode, token);
             if (testingPlatform) { var parsed = JsonNode.Parse(report)!.AsObject(); parsed.Remove("rerunArgs"); report = parsed.ToJsonString(JsonDefaults.Options); }
+            report = ApplyTestRegression("run_dotnet_test", workingDirectory + "\n" + string.Join("\n", testArgs ?? []) , report, execution, regressionsOnly);
             return await CombineAsync("run_dotnet_test", report, execution, workingDirectory, contextLines, testingPlatform ? null : DotnetFilter, compactResponse: compactResponse);
         }, cancellationToken);
 
@@ -69,6 +72,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     [Description("Run a locally installed Playwright and return failures, counts and paths to traces and other attachments from its JSON report. Dependencies are not installed automatically. Environment variables are set only in the child process.")]
     public Task<string> RunPlaywrightAsync(string workingDirectory,
         [Description("Arguments passed to Playwright test, with each argument as a separate array element.") ] string[]? testArgs = null,
+        [Description("When true, keep only tests that passed in the previous run with the same arguments and failed in this run.")] bool regressionsOnly = false,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_playwright", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
@@ -83,6 +87,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["PLAYWRIGHT_JSON_OUTPUT_NAME"] = reportPath, ["FORCE_COLOR"] = "0", ["CI"] = "1" }, token);
             var report = await PlaywrightResultParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, cancellationToken: token);
+            report = ApplyTestRegression("run_playwright", workingDirectory + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_playwright", report, execution, workingDirectory, contextLines, result => HasFailures(result) ? ["--last-failed"] : null, compactResponse: compactResponse);
         }, cancellationToken);
 
@@ -90,6 +95,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     [Description("Run bun test and return failures and counts from its JUnit XML report. The full log is saved to fullLogPath. Dependencies are not installed automatically.")]
     public Task<string> RunBunTestAsync(string workingDirectory,
         [Description("Arguments passed to bun test, with each argument as a separate array element.") ] string[]? testArgs = null,
+        [Description("When true, keep only tests that passed in the previous run with the same arguments and failed in this run.")] bool regressionsOnly = false,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_bun_test", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
@@ -112,6 +118,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
                     if (globals.Count > 0) { parsed["status"] = "error"; report = parsed.ToJsonString(JsonDefaults.Options); }
                 }
             }
+            report = ApplyTestRegression("run_bun_test", workingDirectory + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_bun_test", report, execution, workingDirectory, contextLines, FailedFiles, compactResponse: compactResponse);
         }, cancellationToken);
 
@@ -120,6 +127,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     public Task<string> RunPytestAsync(string workingDirectory,
         [Description("Arguments passed to pytest, with each argument as a separate array element.") ] string[]? testArgs = null,
         [Description("Optional absolute path to the Python executable that has pytest installed.") ] string? pythonPath = null,
+        [Description("When true, keep only tests that passed in the previous run with the same arguments and failed in this run.")] bool regressionsOnly = false,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_pytest", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
@@ -132,6 +140,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync(python, arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["PYTHONUTF8"] = "1", ["PYTHONIOENCODING"] = "utf-8", ["NO_COLOR"] = "1" }, token);
             var report = await TestReportParser.ParseJUnitAsync(reportPath, workingDirectory, execution.ExitCode, noTestsExitCode: 5, cancellationToken: token);
+            report = ApplyTestRegression("run_pytest", workingDirectory + "\n" + (pythonPath ?? "") + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_pytest", report, execution, workingDirectory, contextLines, result => HasFailures(result) ? ["--lf"] : null, compactResponse: compactResponse);
         }, cancellationToken);
 
@@ -139,6 +148,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
     [Description("Run a locally installed Vitest once and return failures and counts from its JSON report. Dependencies are not installed automatically. Environment variables are set only in the child process.")]
     public Task<string> RunVitestAsync(string workingDirectory,
         [Description("Arguments passed to vitest run, with each argument as a separate array element.") ] string[]? testArgs = null,
+        [Description("When true, keep only tests that passed in the previous run with the same arguments and failed in this run.")] bool regressionsOnly = false,
         int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default) =>
         RunAsync("run_vitest", workingDirectory, timeoutSeconds, async (directory, token) =>
         {
@@ -152,6 +162,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var execution = await NativeProcessRunner.RunAsync("node", arguments, workingDirectory, timeoutSeconds,
                 new Dictionary<string, string> { ["FORCE_COLOR"] = "0", ["CI"] = "1" }, token);
             var report = await TestReportParser.ParseVitestAsync(reportPath, workingDirectory, execution.ExitCode, token);
+            report = ApplyTestRegression("run_vitest", workingDirectory + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_vitest", report, execution, workingDirectory, contextLines, FailedFiles, compactResponse: compactResponse, includeSuccessOutput: true);
         }, cancellationToken);
 
@@ -272,10 +283,10 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
                 var files = group.Select(item => AsTestArgument(Path.GetRelativePath(group.Key.ProjectDirectory, Path.Combine(root, item.File.Replace('/', Path.DirectorySeparatorChar))).Replace(Path.DirectorySeparatorChar, '/'))).ToArray();
                 var resultJson = group.Key.Runner switch
                 {
-                    "vitest" => await RunVitestAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
-                    "playwright" => await RunPlaywrightAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
-                    "bun" => await RunBunTestAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
-                    "pytest" => await RunPytestAsync(group.Key.ProjectDirectory, files, pythonPath, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "vitest" => await RunVitestAsync(group.Key.ProjectDirectory, files, regressionsOnly: false, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "playwright" => await RunPlaywrightAsync(group.Key.ProjectDirectory, files, regressionsOnly: false, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "bun" => await RunBunTestAsync(group.Key.ProjectDirectory, files, regressionsOnly: false, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "pytest" => await RunPytestAsync(group.Key.ProjectDirectory, files, pythonPath, regressionsOnly: false, timeoutSeconds, contextLines, compactResponse, cancellationToken),
                     "dotnet" => await RunAffectedDotnetAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
                     _ => JsonDefaults.Serialize(new { status = "error", message = $"Unsupported runner: {group.Key.Runner}" })
                 };
@@ -322,7 +333,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         var filters = files.Select(file => "FullyQualifiedName~" + EscapeDotnetFilterValue(Path.GetFileNameWithoutExtension(file))).Distinct(StringComparer.Ordinal);
         var arguments = new List<string> { project };
         arguments.AddRange(["--filter", string.Join('|', filters)]);
-        return RunDotnetTestAsync(projectDirectory, arguments.ToArray(), timeoutSeconds, contextLines, compactResponse, cancellationToken);
+        return RunDotnetTestAsync(projectDirectory, arguments.ToArray(), regressionsOnly: false, timeoutSeconds, contextLines, compactResponse, cancellationToken);
     }
 
     private static string AsTestArgument(string path) => path.StartsWith("-", StringComparison.Ordinal) ? "./" + path : path;
@@ -442,13 +453,25 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         return false;
     }
 
+    private static string ApplyTestRegression(string tool, string argumentsKey, string report, NativeProcessRunner.Result execution,
+        bool regressionsOnly)
+    {
+        var key = tool + "\n" + argumentsKey;
+        TestBaselines.TryGetValue(key, out var previous);
+        var filtered = TestRegressionFilter.Apply(report, previous, regressionsOnly, out var current);
+        if (execution.Status == "completed" && current != null) UpdateBaseline(TestBaselines, key, current);
+        return filtered;
+    }
+
     private static bool HasFailures(JsonObject result) => result["failures"] is JsonArray { Count: > 0 };
 
     private static bool ListsEveryFailure(JsonObject result, out List<JsonObject> failures)
     {
         failures = result["failures"] is JsonArray array ? array.OfType<JsonObject>().ToList() : [];
-        return failures.Count > 0 && result["globalErrors"] is not JsonArray { Count: > 0 }
-            && result["stats"]?["failed"]?.GetValue<int>() <= failures.Sum(failure => failure["count"]?.GetValue<int>() ?? 1);
+        if (failures.Count == 0 || result["globalErrors"] is JsonArray { Count: > 0 }) return false;
+        if (result["regressionCount"]?.GetValue<int>() is int regressionCount)
+            return failures.Sum(failure => failure["count"]?.GetValue<int>() ?? 1) == regressionCount;
+        return result["stats"]?["failed"]?.GetValue<int>() <= failures.Sum(failure => failure["count"]?.GetValue<int>() ?? 1);
     }
 
     private static string[]? FailedFiles(JsonObject result)

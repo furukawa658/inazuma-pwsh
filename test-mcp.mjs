@@ -997,6 +997,30 @@ process.exitCode = 1;
         const alone = await run([[nearPath, 10]], 2);
         assert.equal(alone.failures[0].codeContext, near.failures[0].codeContext);
     });
+    await check('run_vitest regressionsOnly lists tests that changed from passing to failing', async () => {
+        const project = path.join(fixture, 'vitest-regressions');
+        const cliDirectory = path.join(project, 'node_modules', 'vitest');
+        await mkdir(cliDirectory, { recursive: true });
+        const spec = path.join(project, 'sample.spec.ts').replaceAll('\\', '/');
+        const cli = path.join(cliDirectory, 'vitest.mjs');
+        const emit = results => writeFile(cli, `import fs from 'node:fs'; const out=process.argv.find(a=>a.startsWith('--outputFile.json=')).slice(18); fs.writeFileSync(out, JSON.stringify({success:false,startTime:1,endTime:2,testResults:[{name:${JSON.stringify(spec)},status:'failed',endTime:2,assertionResults:${JSON.stringify(results)}}]})); process.exitCode=1;`);
+        const assertion = (name, status) => status === 'passed'
+            ? { fullName: name, title: name, status: 'passed', failureMessages: [] }
+            : { fullName: name, title: name, status: 'failed', failureMessages: [`Error: ${name} failed\n    at ${spec}:1:1`] };
+        await emit([assertion('regression', 'passed'), assertion('existing failure', 'failed')]);
+        const first = await tool('run_vitest', { workingDirectory: project, regressionsOnly: true });
+        assert.equal(first.stats.failed, 1, JSON.stringify(first));
+        assert.equal(first.regressionCount, undefined);
+        await emit([assertion('regression', 'failed'), assertion('existing failure', 'failed')]);
+        const second = await tool('run_vitest', { workingDirectory: project, regressionsOnly: true });
+        assert.equal(second.stats.failed, 2, JSON.stringify(second));
+        assert.equal(second.regressionCount, 1, JSON.stringify(second));
+        assert.deepEqual(second.failures.map(item => item.title), ['regression']);
+        assert.deepEqual(second.rerunArgs, ['sample.spec.ts']);
+        assert.equal(second.passedTests, undefined);
+        await rm(first.fullLogPath);
+        await rm(second.fullLogPath);
+    });
     await check('run_tsc parses diagnostics, counts and rejects managed arguments', async () => {
         const project = path.join(fixture, 'tsc');
         const libDirectory = path.join(project, 'node_modules', 'typescript', 'lib');
