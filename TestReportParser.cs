@@ -213,7 +213,7 @@ public static class TestReportParser
                         PlaywrightResultParser.Truncate(item.Attribute("testName")?.Value ?? "", 300),
                         location.Success ? PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(location.Groups["file"].Value, workingDirectory), 300) : "",
                         location.Success && int.TryParse(location.Groups["line"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var line) ? line : 0,
-                        "failed", [new ErrorDetail(PlaywrightResultParser.Truncate(message, 500), PlaywrightResultParser.Truncate(stackLines, 2000))]));
+                        "failed", [new ErrorDetail(message, stackLines)]));
                 }
             }
             var report = JsonNode.Parse(Finish(result, exitCode, null))!.AsObject();
@@ -285,7 +285,7 @@ public static class TestReportParser
         }
         return new Failure(PlaywrightResultParser.Truncate(title, 300),
             PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(file, workingDirectory), 300), line, problem.Name.LocalName == "error" ? "error" : "failed",
-            [new ErrorDetail(PlaywrightResultParser.Truncate(message.Trim(), 500), split.Stack)]);
+            [new ErrorDetail(message.Trim(), split.Stack)]);
     }
 
     private static ErrorDetail SplitError(string text)
@@ -295,7 +295,7 @@ public static class TestReportParser
         var message = string.Join("\n", (stackStart < 0 ? lines : lines.Take(stackStart)).Where(l => l.Trim().Length > 0));
         var stack = stackStart < 0 ? "" : PlaywrightResultParser.FilterStack(string.Join("\n", lines.Skip(stackStart)
             .Where(l => StackLineRegex.IsMatch(l.Trim()) && !l.Contains("<anonymous>", StringComparison.Ordinal) && !l.Contains("node:internal", StringComparison.Ordinal))));
-        return new ErrorDetail(PlaywrightResultParser.Truncate(message, 500), stack);
+        return new ErrorDetail(message, stack);
     }
 
     private static (string File, int Line)? FindLocation(string text, string? preferredFileName)
@@ -324,6 +324,6 @@ public static class TestReportParser
     private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures, List<string>? passedTests = null)
     {
         var report = Serialize(new TestReport(status, exitCode, stats, globalErrors, failures, passedTests));
-        return DiagnosticBudget.Fit(report, 5500, "failures", "globalErrors");
+        return DiagnosticBudget.Fit(report, 7000, "failures", "globalErrors");
     }
 }

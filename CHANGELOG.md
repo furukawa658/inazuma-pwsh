@@ -6,7 +6,7 @@
 - Add optional MCP Tasks execution for long-running PowerShell, build, test, lint, and type-check calls. Task-aware clients can poll results and cancel work while existing clients retain synchronous calls.
 - Add `read_symbol` to read exact named code declarations, including Python decorators and overload disambiguation through `occurrence`.
 - Add `run_affected_tests`, `run_cargo_check`, `onlyNew` diagnostics, and `regressionsOnly` test reports so callers can focus on changed and newly failing results.
-- Keep the first test or diagnostic failure detailed while bounding later items, and isolate timeout and cancellation reports so interrupted runs do not replace comparison baselines.
+- Keep the first test failure's full assertion message and stack detailed, compact later failures into location-and-cause summaries, and retain the full report separately. Isolate timeout and cancellation reports so interrupted runs do not replace comparison baselines.
 
 ## 0.8.2
 

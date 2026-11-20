@@ -150,7 +150,7 @@ public static class PlaywrightResultParser
         foreach (var res in results)
         {
             void AddErr(JsonElement el) {
-                var m = Truncate(StripAnsi(ExtractMessage(el)), 500);
+                var m = StripAnsi(ExtractMessage(el));
                 var st = FilterStack(el.ValueKind == JsonValueKind.Object && el.TryGetProperty("stack", out var s) ? s.GetString() : null);
                 if (m.Length > 0 || st.Length > 0) list.Add(new ErrorDetail(m, st));
             }
@@ -188,9 +188,9 @@ public static class PlaywrightResultParser
     internal static string FilterStack(string? stack)
     {
         if (string.IsNullOrWhiteSpace(stack)) return "";
-        var lines = stack.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => Truncate(l.Trim(), 300)).Where(l => l.Length > 0);
-        var user = lines.Where(l => !l.Contains("node_modules", StringComparison.OrdinalIgnoreCase) && !l.Contains("internal/", StringComparison.OrdinalIgnoreCase)).Take(4).ToList();
-        return string.Join("\n", user.Count > 0 ? user : lines.Take(4));
+        var lines = stack.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => Truncate(l.Trim(), 300)).Where(l => l.Length > 0).ToList();
+        var user = lines.Where(l => !l.Contains("node_modules", StringComparison.OrdinalIgnoreCase) && !l.Contains("internal/", StringComparison.OrdinalIgnoreCase)).ToList();
+        return string.Join("\n", user.Count > 0 ? user : lines);
     }
 
     internal static string StripAnsi(string? text) => string.IsNullOrEmpty(text) ? "" : AnsiRegex.Replace(text, "");
@@ -205,7 +205,7 @@ public static class PlaywrightResultParser
     private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures, List<string> passedTests)
     {
         var report = JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, globalErrors, failures, passedTests), JsonOptions);
-        return DiagnosticBudget.Fit(report, 5500, "failures", "globalErrors");
+        return DiagnosticBudget.Fit(report, 50000, "failures", "globalErrors");
     }
 
     internal static string ClipLines(string? str, int maxLines) => string.IsNullOrEmpty(str) ? "" : string.Join("\n", str.Split('\n').Take(maxLines));
