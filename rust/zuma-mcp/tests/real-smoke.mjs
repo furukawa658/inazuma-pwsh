@@ -62,8 +62,9 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 16);
+  assert.equal(tools.result.tools.length, 17);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
+  assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
 
   const callTool = async (name, args, timeoutMs) => {
     const response = await request('tools/call', { name, arguments: args }, timeoutMs).response;
