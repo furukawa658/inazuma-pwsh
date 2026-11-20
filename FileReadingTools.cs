@@ -90,6 +90,137 @@ public sealed class FileReadingTools
         CancellationToken cancellationToken = default) =>
         UsageLog.TrackFileAsync("read_section", path, ReadSections(path, query, startLine, endLine, maxChars, ranges));
 
+    [McpServerTool(Name = "read_symbol")]
+    [Description("Read one named declaration from a code file with line numbers. Symbol matching is case-insensitive and must match the declared identifier. Overloads or duplicate names require occurrence to select a 1-based candidate.")]
+    public Task<string> ReadSymbolAsync(
+        [Description("Absolute path to the code file.")] string path,
+        [Description("Exact declared symbol name, for example Run or CalculateTotal.")] string symbol,
+        [Description("1-based matching declaration to select when multiple symbols share the same name.")] int? occurrence = null,
+        [Description("Maximum characters of formatted text to return (clamped 1000..50000, default 12000).")] int maxChars = 12000,
+        CancellationToken cancellationToken = default) =>
+        UsageLog.TrackFileAsync("read_symbol", path, ReadSymbol(path, symbol, occurrence, maxChars));
+
+    private static Task<string> ReadSymbol(string path, string symbol, int? occurrence, int maxChars)
+    {
+        var validationError = ValidateFile(path);
+        if (validationError != null) return Task.FromResult(validationError);
+        if (string.IsNullOrWhiteSpace(symbol) || symbol.Length > 256)
+            return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = "symbol must contain 1 to 256 characters." }));
+
+        try
+        {
+            var kind = FileOutline.DetermineKind(path);
+            if (kind != "code")
+                return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = "read_symbol requires a supported code file." }));
+
+            var (lines, encoding, _) = FileOutline.ReadAndDecodeFile(path);
+            var outline = FileOutline.GetOutline(path, lines, kind);
+            var named = outline
+                .Select(entry => new { entry, name = FileOutline.GetDeclaredSymbol(entry.Title) })
+                .Where(item => item.name != null)
+                .ToList();
+            var matches = named
+                .Where(item => string.Equals(item.name, symbol.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Select(item => item.entry)
+                .ToList();
+
+            if (matches.Count == 0)
+            {
+                var candidates = named
+                    .Select(item => new { item.name, item.entry, score = SimilarityScore(symbol, item.name!) })
+                    .Where(item => item.score <= Math.Max(2, symbol.Length / 3))
+                    .OrderBy(item => item.score)
+                    .Take(10)
+                    .Select(item => new { symbol = item.name, item.entry.Start, item.entry.End, item.entry.Title })
+                    .ToArray();
+                return Task.FromResult(JsonDefaults.Serialize(new
+                {
+                    status = "error",
+                    path,
+                    message = "No declared symbol matched.",
+                    candidates
+                }));
+            }
+
+            var matchList = matches.Select((entry, index) => new
+            {
+                occurrence = index + 1,
+                start = entry.Start,
+                end = FileOutline.GetDeclaredEnd(path, lines, entry),
+                title = entry.Title
+            }).ToArray();
+            if (matches.Count > 1 && !occurrence.HasValue)
+                return Task.FromResult(JsonDefaults.Serialize(new
+                {
+                    status = "ambiguous",
+                    path,
+                    symbol,
+                    matchCount = matches.Count,
+                    matches = matchList
+                }));
+            if (occurrence is < 1 || occurrence > matches.Count)
+                return Task.FromResult(JsonDefaults.Serialize(new
+                {
+                    status = "error",
+                    path,
+                    symbol,
+                    message = $"occurrence must be between 1 and {matches.Count}.",
+                    matches = matchList
+                }));
+
+            var selectedOccurrence = occurrence ?? 1;
+            var selected = matches[selectedOccurrence - 1];
+            int symbolEndLine = FileOutline.GetDeclaredEnd(path, lines, selected);
+            int clampedMaxChars = Math.Clamp(maxChars, 1000, 50000);
+            var text = new StringBuilder();
+            int lastLineReturned = selected.Start;
+            int? nextLine = null;
+            bool truncated = false;
+            for (int lineNumber = selected.Start; lineNumber <= symbolEndLine; lineNumber++)
+            {
+                string formatted = $"{lineNumber}: {lines[lineNumber - 1]}";
+                if (text.Length > 0 && text.Length + 1 + formatted.Length > clampedMaxChars)
+                {
+                    truncated = true;
+                    nextLine = lineNumber;
+                    break;
+                }
+                if (text.Length == 0 && formatted.Length > clampedMaxChars)
+                {
+                    text.Append(formatted[..clampedMaxChars]);
+                    truncated = true;
+                    nextLine = lineNumber + 1 <= symbolEndLine ? lineNumber + 1 : null;
+                    break;
+                }
+                if (text.Length > 0) text.Append('\n');
+                text.Append(formatted);
+                lastLineReturned = lineNumber;
+            }
+
+            return Task.FromResult(JsonDefaults.Serialize(new
+            {
+                status = "success",
+                path,
+                encoding,
+                totalLines = lines.Length,
+                symbol,
+                occurrence = selectedOccurrence,
+                matchCount = matches.Count,
+                title = selected.Title,
+                startLine = selected.Start,
+                endLine = lastLineReturned,
+                symbolEndLine,
+                truncated,
+                nextLine,
+                text = text.ToString()
+            }));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return Task.FromResult(JsonDefaults.Serialize(new { status = "error", message = ex.Message }));
+        }
+    }
+
     private static async Task<string> ReadSections(string path, string? query, int? startLine, int? endLine, int maxChars, JsonElement[]? ranges)
     {
         if (ranges == null) return await ReadSection(path, query, startLine, endLine, maxChars);
