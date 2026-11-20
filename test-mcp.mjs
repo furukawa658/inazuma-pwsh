@@ -1404,6 +1404,31 @@ process.exitCode = 1;
         await assert.rejects(stat(marker), { code: 'ENOENT' });
         await rm(timeout.fullLogPath);
     });
+    await check('diagnostic timeout isolates and removes partial reports', async () => {
+        const project = path.join(fixture, 'timeout-report-cleanup');
+        const cliDirectory = path.join(project, 'node_modules', 'playwright');
+        const marker = path.join(project, 'report-paths.txt');
+        const mode = path.join(project, 'mode.txt');
+        await mkdir(cliDirectory, { recursive: true });
+        const script = `const fs=require('node:fs'); const report=process.env.PLAYWRIGHT_JSON_OUTPUT_NAME; fs.appendFileSync(${JSON.stringify(marker)}, report+'\\n'); if(fs.readFileSync(${JSON.stringify(mode)},'utf8').trim()==='partial'){ fs.writeFileSync(report, '{"suites":['); setInterval(()=>{},1000); } else { fs.writeFileSync(report, JSON.stringify({suites:[],stats:{duration:1}})); }`;
+        await writeFile(path.join(cliDirectory, 'cli.js'), script);
+        await writeFile(mode, 'partial');
+
+        const timedOut = await tool('run_playwright', { workingDirectory: project, timeoutSeconds: 1 });
+        assert.equal(timedOut.status, 'timeout', JSON.stringify(timedOut));
+        const firstPath = (await readFile(marker, 'utf8')).trim().split(/\r?\n/).at(0);
+        await assert.rejects(stat(path.dirname(firstPath)), { code: 'ENOENT' });
+        await rm(timedOut.fullLogPath);
+
+        await writeFile(mode, 'complete');
+        const completed = await tool('run_playwright', { workingDirectory: project });
+        assert.equal(completed.status, 'no_tests', JSON.stringify(completed));
+        const paths = (await readFile(marker, 'utf8')).trim().split(/\r?\n/);
+        assert.equal(paths.length, 2);
+        assert.notEqual(paths[0], paths[1]);
+        await assert.rejects(stat(path.dirname(paths[1])), { code: 'ENOENT' });
+        await rm(completed.fullLogPath);
+    });
     await check('trace failure, HTTP resource and pre-failure DOM', async () => {
         const zipPath = path.join(fixture, 'trace.zip');
         const trace = [
