@@ -206,6 +206,90 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             return await CombineAsync("run_eslint", report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
         }, cancellationToken);
 
+    [McpServerTool(Name = "run_affected_tests")]
+    [Description("Select test files related to Git changes by direct changes, naming conventions, and relative imports, then run each detected test runner once. Untracked files are included. Only installed project dependencies are used.")]
+    public async Task<string> RunAffectedTestsAsync(string workingDirectory,
+        [Description("Optional absolute path to the Python executable used for selected pytest files.")] string? pythonPath = null,
+        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0, [Description(CompactResponseText)] bool compactResponse = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory))
+        {
+            UsageLog.RecordCall("run_affected_tests");
+            return JsonDefaults.Serialize(new { status = "error", message = "workingDirectory must be an existing absolute directory." });
+        }
+
+        try
+        {
+            UsageLog.RecordCall("run_affected_tests");
+            var (root, changedFiles, selected) = await AffectedTestSelector.SelectAsync(workingDirectory, cancellationToken);
+            var groups = selected.GroupBy(item => new { item.Runner, item.ProjectDirectory });
+            var runs = new JsonArray();
+            var failed = false;
+            var allNoTests = selected.Count > 0;
+            foreach (var group in groups)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var files = group.Select(item => AsTestArgument(Path.GetRelativePath(group.Key.ProjectDirectory, Path.Combine(root, item.File.Replace('/', Path.DirectorySeparatorChar))).Replace(Path.DirectorySeparatorChar, '/'))).ToArray();
+                var resultJson = group.Key.Runner switch
+                {
+                    "vitest" => await RunVitestAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "playwright" => await RunPlaywrightAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "bun" => await RunBunTestAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "pytest" => await RunPytestAsync(group.Key.ProjectDirectory, files, pythonPath, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "dotnet" => await RunAffectedDotnetAsync(group.Key.ProjectDirectory, files, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    _ => JsonDefaults.Serialize(new { status = "error", message = $"Unsupported runner: {group.Key.Runner}" })
+                };
+                var result = JsonNode.Parse(resultJson)!.AsObject();
+                var runStatus = result["status"]?.GetValue<string>();
+                var noTests = runStatus == "no_tests";
+                allNoTests &= noTests;
+                failed |= !noTests && (runStatus is "error" or "cancelled" or "timeout" or "report_unavailable"
+                    || (result["exitCode"]?.GetValue<int>() ?? 0) != 0);
+                var run = new JsonObject
+                {
+                    ["runner"] = group.Key.Runner,
+                    ["projectDirectory"] = Path.GetRelativePath(root, group.Key.ProjectDirectory).Replace(Path.DirectorySeparatorChar, '/'),
+                    ["tests"] = new JsonArray(files.Select(file => (JsonNode?)JsonValue.Create(file)).ToArray()),
+                    ["result"] = result
+                };
+                runs.Add(run);
+            }
+
+            return JsonDefaults.Serialize(new
+            {
+                status = selected.Count == 0 || allNoTests ? "no_tests" : failed ? "error" : "success",
+                repositoryRoot = root,
+                changedFiles,
+                selectedTests = selected.Select(item => new { file = item.File, runner = item.Runner }),
+                runs
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return JsonDefaults.Serialize(new { status = "cancelled" });
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or System.ComponentModel.Win32Exception)
+        {
+            return JsonDefaults.Serialize(new { status = "error", message = exception.Message });
+        }
+    }
+
+    private Task<string> RunAffectedDotnetAsync(string projectDirectory, string[] files, int timeoutSeconds, int contextLines,
+        bool compactResponse, CancellationToken cancellationToken)
+    {
+        var project = Directory.GetFiles(projectDirectory, "*.csproj").Order(StringComparer.Ordinal).FirstOrDefault()
+            ?? throw new FileNotFoundException($"No .csproj was found for the selected .NET tests in {projectDirectory}.");
+        var filters = files.Select(file => "FullyQualifiedName~" + EscapeDotnetFilterValue(Path.GetFileNameWithoutExtension(file))).Distinct(StringComparer.Ordinal);
+        var arguments = new List<string> { project };
+        arguments.AddRange(["--filter", string.Join('|', filters)]);
+        return RunDotnetTestAsync(projectDirectory, arguments.ToArray(), timeoutSeconds, contextLines, compactResponse, cancellationToken);
+    }
+
+    private static string AsTestArgument(string path) => path.StartsWith("-", StringComparison.Ordinal) ? "./" + path : path;
+
+    private static string EscapeDotnetFilterValue(string value) => System.Text.RegularExpressions.Regex.Replace(value, @"[\\&|=!~]", @"\$0");
+
     [McpServerTool(Name = "inspect_playwright_trace")]
     [Description("Inspect a trace ZIP without extracting it and return failed actions, HTTP and JavaScript errors, and a DOM excerpt before the failure. This does not replace visual verification of rendering or CSS.")]
     public Task<string> InspectPlaywrightTraceAsync(string tracePath, int maxOutputChars = 6000, string? workingDirectory = null,

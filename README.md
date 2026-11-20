@@ -39,6 +39,7 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | --- | --- |
 | `run_dotnet_build` | Run a build and return the exit code and SARIF compiler diagnostics. Warnings are omitted by default. |
 | `run_dotnet_test` | Run `dotnet test` and return test counts and failures with file, line, message, and stack from its TRX reports. |
+| `run_affected_tests` | Select tests from Git changes, untracked files, naming conventions, and relative imports, then run each detected test runner once. |
 | `run_playwright` | Run locally installed Playwright and return test counts, failures, and attachment paths from its JSON report. |
 | `inspect_playwright_trace` | Inspect a trace ZIP for failed actions, HTTP and console errors, and a DOM excerpt. |
 | `run_bun_test` | Run `bun test` and return test counts and failures with file, line, message, and stack from its JUnit XML report. |
@@ -114,6 +115,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 #### New tools and options
 
 - **`run_dotnet_test`.** Runs `dotnet test` and returns test counts and failures with file, line, message, and stack from its TRX reports. VSTest is verified with a mock project; the Microsoft.Testing.Platform path (selected by `global.json`) has not been run against a real project.
+- **`run_affected_tests`.** Uses tracked and untracked Git changes to select tests by direct changes, file-name conventions, and relative imports, then groups them by runner and project before execution.
 - **`run_eslint`.** Runs the locally installed ESLint and returns error and warning counts, per-rule counts, and the first 15 problems.
 - **`search_files`.** Searches text files under a directory with a regex and returns per-file match counts and the first matching lines in at most 8,000 characters. It skips `.git`, `node_modules`, `.venv`, binary files, and files over 5 MB, and does not apply `.gitignore`.
 - **`contextLines` for `run_dotnet_build`.** Compiler errors can carry `codeContext` like the test tools. `codeContext` is added only for files under `workingDirectory`.

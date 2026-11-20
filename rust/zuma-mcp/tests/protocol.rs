@@ -59,6 +59,8 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 17);
+    assert!(tools.iter().any(|tool| tool["name"] == "run_affected_tests"));
     for tool in tools {
         for (name, schema) in tool["inputSchema"]["properties"].as_object().unwrap() {
             if schema["type"] == "array" {
