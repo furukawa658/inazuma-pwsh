@@ -230,7 +230,28 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             UsageLog.RecordCall(tool);
             return JsonDefaults.Serialize(new { status = "error", message = exception.Message });
         }
-        finally { Directory.Delete(directory, recursive: true); }
+        finally { await DeleteDiagnosticDirectoryAsync(directory); }
+    }
+
+    private static async Task DeleteDiagnosticDirectoryAsync(string directory)
+    {
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            if (!Directory.Exists(directory)) return;
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 5)
+            {
+                await Task.Delay(attempt * 50);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 5)
+            {
+                await Task.Delay(attempt * 50);
+            }
+        }
     }
 
     private static string? FindPlaywrightCli(string workingDirectory) =>
