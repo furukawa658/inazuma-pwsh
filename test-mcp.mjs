@@ -986,11 +986,11 @@ process.exitCode = 1;
         const cliDirectory = path.join(project, 'node_modules', 'vitest');
         await mkdir(cliDirectory, { recursive: true });
         const spec = path.join(project, 'sample.spec.ts').replaceAll('\\', '/');
-        const stackFrames = index => Array.from({ length: 4 }, (_, frame) => `    at frame${index}-${frame} (${spec}:${index + 1}:${frame + 1}) ${'S'.repeat(240)}`).join('\n');
+        const stackFrames = index => Array.from({ length: index === 0 ? 12 : 4 }, (_, frame) => `    at frame${index}-${frame} (${spec}:${index + 1}:${frame + 1}) ${'S'.repeat(80)}`).join('\n');
         const failures = Array.from({ length: 10 }, (_, index) => ({
             fullName: `primary failure ${index}`,
             status: 'failed',
-            failureMessages: [`AssertionError: ${index === 0 ? 'D'.repeat(500) : 'later failure ' + 'E'.repeat(400)}\n${stackFrames(index)}`]
+            failureMessages: [`AssertionError: ${index === 0 ? 'D'.repeat(1200) + ' FIRST-DIFF-END' : 'later failure ' + 'E'.repeat(400)}\n${stackFrames(index)}`]
         }));
         const payload = { success: false, startTime: 1000, testResults: [{
             name: spec, status: 'failed', message: '', endTime: 1250,
@@ -1000,7 +1000,8 @@ process.exitCode = 1;
         const result = await tool('run_vitest', { workingDirectory: project });
         assert.ok(JSON.stringify(result).length <= 8000, `response exceeded 8000 chars: ${JSON.stringify(result).length}`);
         assert.equal(result.failures.length, 10, JSON.stringify(result));
-        assert.ok(result.failures[0].errors[0].stack.length > 800, 'first stack must remain detailed');
+        assert.match(result.failures[0].errors[0].message, /FIRST-DIFF-END$/, 'first assertion diff must retain its ending');
+        assert.match(result.failures[0].errors[0].stack, /frame0-11/, 'first stack must retain its final frame');
         assert.equal(result.failures[0].summary, undefined);
         assert.ok(result.failures.slice(1).every(failure => failure.summary && failure.errors === undefined && failure.stack === undefined), JSON.stringify(result.failures.slice(1)));
         assert.match(result.failures[1].summary, /sample\.spec\.ts:2/);

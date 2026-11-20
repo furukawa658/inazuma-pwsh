@@ -88,7 +88,7 @@ The agent must choose and reuse a unique `sessionId` to keep chat state separate
 
 - Every packaged platform starts the Rust front end. UTF-8 code outlines, Git-aware search, and log summaries run locally, while the C# compatibility core retains PowerShell, diagnostics, symbol reads, and non-UTF-8 fallback.
 - Long-running PowerShell, build, test, lint, and type-check calls can return MCP Tasks for polling and cancellation. Clients without Tasks opt-in keep synchronous responses.
-- `read_symbol` reads exact declarations and resolves overloads with `occurrence`. Test and diagnostic tools add affected-test selection, new-diagnostic filtering, regression-only reports, Rust checks, and bounded failure summaries.
+- `read_symbol` reads exact declarations and resolves overloads with `occurrence`. Test and diagnostic tools add affected-test selection, new-diagnostic filtering, regression-only reports, Rust checks, and bounded failure reports. The first failure keeps its full assertion message and stack; later failures use compact summaries, while the full report remains available separately.
 
 ## What's new in 0.8.2
 

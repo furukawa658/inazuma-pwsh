@@ -560,6 +560,13 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         result.Remove("output");
         result.Remove("warnings");
 
+        if (result["failures"] is JsonArray { Count: > 0 } failures && failures[0] is JsonObject primaryFailure
+            && primaryFailure["attachments"] is JsonArray attachments)
+        {
+            primaryFailure["omittedAttachments"] = attachments.Count;
+            primaryFailure.Remove("attachments");
+        }
+
         json = DiagnosticBudget.Fit(result, 8000, "failures", "diagnostics", "errors", "warnings", "globalErrors");
         if (json.Length <= 8000) return json;
 
@@ -569,13 +576,6 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
 
         json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;
-
-        if (result["failures"] is JsonArray { Count: > 0 } failures && failures[0] is JsonObject primaryFailure
-            && primaryFailure["attachments"] is JsonArray attachments)
-        {
-            primaryFailure["omittedAttachments"] = attachments.Count;
-            primaryFailure.Remove("attachments");
-        }
 
         json = result.ToJsonString(JsonDefaults.Options);
         if (json.Length <= 8000) return json;

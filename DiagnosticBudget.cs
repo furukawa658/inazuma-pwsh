@@ -15,10 +15,10 @@ internal static class DiagnosticBudget
     public static string Fit(JsonObject root, int maxChars, params string[] arrayNames)
     {
         var json = root.ToJsonString(JsonDefaults.Options);
-        if (json.Length <= maxChars) return json;
-
+        var exceedsBudget = json.Length > maxChars;
         foreach (var arrayName in arrayNames)
         {
+            if (!exceedsBudget && arrayName is not ("failures" or "globalErrors")) continue;
             if (root[arrayName] is not JsonArray array) continue;
             for (var index = 1; index < array.Count; index++)
                 array[index] = array[index] is JsonValue stringValue && stringValue.TryGetValue<string>(out var text)
@@ -43,7 +43,39 @@ internal static class DiagnosticBudget
             if (json.Length <= maxChars) return json;
         }
 
-        return json;
+        CompactPrimary(root, maxChars, arrayNames);
+        return root.ToJsonString(JsonDefaults.Options);
+    }
+
+    private static void CompactPrimary(JsonObject root, int maxChars, string[] arrayNames)
+    {
+        while (root.ToJsonString(JsonDefaults.Options).Length > maxChars)
+        {
+            (JsonObject Owner, string Name, string Value)? longest = null;
+            foreach (var arrayName in arrayNames)
+            {
+                if (root[arrayName] is not JsonArray { Count: > 0 } array || array[0] is not JsonObject first) continue;
+                foreach (var candidate in DetailStrings(first))
+                    if (candidate.Value.Length > 240 && (!longest.HasValue || candidate.Value.Length > longest.Value.Value.Length)) longest = candidate;
+            }
+            if (!longest.HasValue) break;
+            var overflow = root.ToJsonString(JsonDefaults.Options).Length - maxChars;
+            var value = longest.Value.Value;
+            var length = Math.Max(240, value.Length - overflow - 32);
+            longest.Value.Owner[longest.Value.Name] = PlaywrightResultParser.Truncate(value, length);
+        }
+    }
+
+    private static IEnumerable<(JsonObject Owner, string Name, string Value)> DetailStrings(JsonObject item)
+    {
+        if (item["errors"] is JsonArray errors)
+            foreach (var error in errors.OfType<JsonObject>())
+                foreach (var name in new[] { "message", "stack" })
+                    if (error[name] is JsonValue textNode && textNode.TryGetValue<string>(out var text))
+                        yield return (error, name, text);
+        foreach (var name in new[] { "message", "stack", "summary", "codeContext" })
+            if (item[name] is JsonValue textNode && textNode.TryGetValue<string>(out var text))
+                yield return (item, name, text);
     }
 
     private static JsonObject Summarize(JsonObject? item)
