@@ -121,7 +121,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 - **`contextLines` for `run_dotnet_build`.** Compiler errors can carry `codeContext` like the test tools. `codeContext` is added only for files under `workingDirectory`.
 - **`rerunArgs`.** Failed test runs return arguments that rerun only the failures: failing files for `run_bun_test` and `run_vitest`, `--lf` for `run_pytest`, `--last-failed` for `run_playwright`, and a `--filter` expression for `run_dotnet_test` (VSTest). It is omitted when the report does not list every failure.
 - **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.
-- **`run_tsc` additions.** `onlyNew: true` lists only diagnostics that the previous run with the same `workingDirectory` and `tscArgs` did not have, with `newCount` and `fixedCount`; the previous result is kept in memory until the server stops. `--build` and `-b` are accepted and omit `--noEmit`.
+- **`onlyNew` diagnostics.** `run_dotnet_build`, `run_eslint`, and `run_tsc` list only diagnostics absent from the previous run with the same arguments, and return `newCount` and `fixedCount`. The previous result is kept in memory until the server stops. For `run_tsc`, `--build` and `-b` are accepted and omit `--noEmit`.
 
 Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.2/CHANGELOG.md).
 

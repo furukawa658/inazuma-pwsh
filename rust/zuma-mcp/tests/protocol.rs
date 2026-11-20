@@ -61,6 +61,10 @@ fn array_tool_parameters_define_items() {
     let tools = list_response["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 17);
     assert!(tools.iter().any(|tool| tool["name"] == "run_affected_tests"));
+    for name in ["run_dotnet_build", "run_eslint", "run_tsc"] {
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["onlyNew"]["type"], "boolean");
+    }
     for tool in tools {
         for (name, schema) in tool["inputSchema"]["properties"].as_object().unwrap() {
             if schema["type"] == "array" {

@@ -46,13 +46,14 @@ public static class DotnetBuildParser
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
-    public static async Task<string> ParseAsync(
+    public static async Task<(string Report, HashSet<string>? Baseline)> ParseAsync(
         string reportPath,
         string workingDirectory,
         int exitCode,
         bool includeWarnings = false,
         CancellationToken cancellationToken = default,
-        string? logPath = null)
+        string? logPath = null,
+        IReadOnlySet<string>? previous = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -76,6 +77,7 @@ public static class DotnetBuildParser
         var allErrors = new List<Diagnostic>();
         var allWarnings = new List<Diagnostic>();
         var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var baseline = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int totalErrors = 0, totalWarnings = 0, totalInfos = 0, filesEvaluated = 0;
         bool invalidReport = false;
 
@@ -140,17 +142,22 @@ public static class DotnetBuildParser
                         var dedupeKey = $"{ruleId}|{path}|{line}|{col}|{msg}";
                         if (!seenKeys.Add(dedupeKey)) continue;
 
+                        var diagnostic = new Diagnostic(ruleId, level, msg, path, line, col);
                         if (isError)
                         {
                             totalErrors++;
+                            baseline.Add(BaselineKey(diagnostic));
                             if (allErrors.Count < 30)
-                                allErrors.Add(new Diagnostic(ruleId, level, msg, path, line, col));
+                                allErrors.Add(diagnostic);
                         }
                         else if (level == "warning")
                         {
                             totalWarnings++;
-                            if (includeWarnings && allWarnings.Count < 15)
-                                allWarnings.Add(new Diagnostic(ruleId, level, msg, path, line, col));
+                            if (includeWarnings)
+                            {
+                                baseline.Add(BaselineKey(diagnostic));
+                                if (allWarnings.Count < 15) allWarnings.Add(diagnostic);
+                            }
                         }
                         else totalInfos++;
                     }
@@ -183,7 +190,9 @@ public static class DotnetBuildParser
                 var key = $"{code}||||{message}";
                 if (!seenKeys.Add(key)) continue;
                 totalErrors++;
-                if (allErrors.Count < 30) allErrors.Add(new Diagnostic(code, "error", message, "", 0, 0));
+                var diagnostic = new Diagnostic(code, "error", message, "", 0, 0);
+                baseline.Add(BaselineKey(diagnostic));
+                if (allErrors.Count < 30) allErrors.Add(diagnostic);
             }
         }
 
@@ -191,7 +200,13 @@ public static class DotnetBuildParser
             ? (exitCode == 0 ? "report_unavailable" : "error")
             : (exitCode == 0 && totalErrors == 0 ? "success" : "error");
 
-        return SerializeWithLimit(status, exitCode, totalErrors, totalWarnings, totalInfos, filesEvaluated, allErrors, allWarnings);
+        var previousKeys = previous;
+        var listedErrors = previousKeys == null ? allErrors : allErrors.Where(diagnostic => !previousKeys.Contains(BaselineKey(diagnostic))).ToList();
+        var listedWarnings = previousKeys == null ? allWarnings : allWarnings.Where(diagnostic => !previousKeys.Contains(BaselineKey(diagnostic))).ToList();
+        var current = invalidReport ? null : baseline;
+        var newCount = previous == null || current == null ? (int?)null : current.Count(key => !previous.Contains(key));
+        var fixedCount = previous == null || current == null ? (int?)null : previous.Count(key => !current.Contains(key));
+        return (SerializeWithLimit(status, exitCode, totalErrors, totalWarnings, totalInfos, filesEvaluated, listedErrors, listedWarnings, newCount, fixedCount), current);
     }
 
     private static (string path, int line, int col) ExtractLocation(JsonElement res, string workingDir)
@@ -241,7 +256,7 @@ public static class DotnetBuildParser
 
     private static string SerializeWithLimit(
         string status, int exitCode, int totalErrors, int totalWarnings, int totalInfos, int filesEvaluated,
-        List<Diagnostic> errors, List<Diagnostic> warnings)
+        List<Diagnostic> errors, List<Diagnostic> warnings, int? newCount, int? fixedCount)
     {
         var curErrors = errors;
         var curWarnings = warnings;
@@ -250,7 +265,10 @@ public static class DotnetBuildParser
         {
             var summary = new Summary(totalErrors, totalWarnings, curErrors.Count, curWarnings.Count, filesEvaluated, totalInfos);
             var report = new BuildReport(status, exitCode, summary, curErrors, curWarnings);
-            var json = JsonSerializer.Serialize(report, JsonOptions);
+            var root = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(report, JsonOptions))!.AsObject();
+            if (newCount != null) root["newCount"] = newCount;
+            if (fixedCount != null) root["fixedCount"] = fixedCount;
+            var json = root.ToJsonString(JsonDefaults.Options);
             if (json.Length <= 5500) return json;
 
             if (attempt == 0)
@@ -276,8 +294,13 @@ public static class DotnetBuildParser
         }
 
         var finalSummary = new Summary(totalErrors, totalWarnings, curErrors.Count, curWarnings.Count, filesEvaluated, totalInfos);
-        return JsonSerializer.Serialize(new BuildReport(status, exitCode, finalSummary, curErrors, curWarnings), JsonOptions);
+        var finalRoot = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new BuildReport(status, exitCode, finalSummary, curErrors, curWarnings), JsonOptions))!.AsObject();
+        if (newCount != null) finalRoot["newCount"] = newCount;
+        if (fixedCount != null) finalRoot["fixedCount"] = fixedCount;
+        return finalRoot.ToJsonString(JsonDefaults.Options);
     }
+
+    private static string BaselineKey(Diagnostic diagnostic) => $"{diagnostic.Level}|{diagnostic.Path}|{diagnostic.RuleId}|{diagnostic.Message}";
 
     private static string Truncate(string str, int maxLen) =>
         str.Length <= maxLen ? str : string.Concat(str.AsSpan(0, maxLen), "...");
