@@ -8,6 +8,13 @@ const rids = { 'win32-x64': 'win-x64', 'linux-x64': 'linux-x64', 'linux-arm64': 
 const target = process.argv[2];
 const rid = rids[target];
 if (!rid) { console.error(`Unknown target "${target}". Use one of: ${Object.keys(rids).join(', ')}`); process.exit(2); }
+const nativeTarget = process.platform === 'win32' ? 'win32-x64'
+    : process.platform === 'darwin' ? (process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64')
+    : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
+if (target !== nativeTarget) {
+    console.error(`The ${target} Rust server must be built on its matching host (${nativeTarget} detected).`);
+    process.exit(2);
+}
 
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.dirname(extensionDir);
@@ -32,17 +39,13 @@ rmSync(serverDir, { recursive: true, force: true });
 const runtimeDir = path.join(extensionDir, 'server', rid);
 run('dotnet', ['publish', 'InazumaPwsh.csproj', '-c', 'Release', '-r', rid, '--nologo', '-v:q',
     '-o', runtimeDir], root);
-if (target === 'win32-x64') {
-    if (process.platform !== 'win32') {
-        console.error('The win32-x64 Rust server must be built on Windows.');
-        process.exit(2);
-    }
-    const rustManifest = path.join(root, 'rust', 'zuma-mcp', 'Cargo.toml');
-    run('cargo', ['build', '--release', '--manifest-path', rustManifest], root);
-    const coreExecutable = path.join(runtimeDir, 'InazumaPwsh.core.exe');
-    renameSync(path.join(runtimeDir, 'InazumaPwsh.exe'), coreExecutable);
-    copyFileSync(path.join(root, 'rust', 'zuma-mcp', 'target', 'release', 'zuma-mcp.exe'),
-        path.join(runtimeDir, 'InazumaPwsh.exe'));
-}
+const rustManifest = path.join(root, 'rust', 'zuma-mcp', 'Cargo.toml');
+run('cargo', ['build', '--release', '--manifest-path', rustManifest], root);
+const executableExtension = process.platform === 'win32' ? '.exe' : '';
+const publishedExecutable = path.join(runtimeDir, `InazumaPwsh${executableExtension}`);
+const coreExecutable = path.join(runtimeDir, `InazumaPwsh.core${executableExtension}`);
+renameSync(publishedExecutable, coreExecutable);
+copyFileSync(path.join(root, 'rust', 'zuma-mcp', 'target', 'release', `zuma-mcp${executableExtension}`),
+    publishedExecutable);
 run('npx', ['vsce', 'package', '--target', target, '--no-dependencies', '--out',
     path.join(root, 'artifacts', `zuma-mcp-${version}-${target}.vsix`)], extensionDir);

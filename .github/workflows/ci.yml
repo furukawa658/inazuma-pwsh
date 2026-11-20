@@ -22,7 +22,6 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
-        if: matrix.os == 'windows-latest'
       - name: Build packaged server
         run: node vscode-extension/build-target.mjs ${{ matrix.target }}
       - name: Run packaged real smoke test

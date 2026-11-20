@@ -59,6 +59,10 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
 
+### Rust file tools
+
+Every packaged platform starts the Rust MCP front end. It handles UTF-8 Markdown and code outlines, explicit line ranges, `search_files`, and `summarize_log` without starting the .NET compatibility core. Git-aware search, Python decorators, and the existing structured response contracts remain available. PowerShell AST parsing, non-UTF-8 fallback, diagnostics, and persistent sessions continue through the self-contained C# core.
+
 ### Asynchronous tool calls
 
 Clients using MCP protocol revision `2026-07-28` and the `io.modelcontextprotocol/tasks` extension can request `execute_powershell` and the build, test, lint, and type-check tools as MCP Tasks. The server returns a task handle immediately; clients poll with `tasks/get` and can signal cancellation with `tasks/cancel`. Clients without Tasks opt-in keep the synchronous responses. File-reading, log, and trace tools remain synchronous.
@@ -124,7 +128,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 - **`run_dotnet_test`.** Runs `dotnet test` and returns test counts and failures with file, line, message, and stack from its TRX reports. VSTest is verified with a mock project; the Microsoft.Testing.Platform path (selected by `global.json`) has not been run against a real project.
 - **`run_affected_tests`.** Uses tracked and untracked Git changes to select tests by direct changes, file-name conventions, and relative imports, then groups them by runner and project before execution.
 - **`run_eslint`.** Runs the locally installed ESLint and returns error and warning counts, per-rule counts, and the first 15 problems.
-- **`search_files`.** Searches text files under a directory with a regex and returns per-file match counts and the first matching lines in at most 8,000 characters. It skips `.git`, `node_modules`, `.venv`, binary files, and files over 5 MB, and does not apply `.gitignore`.
+- **`search_files`.** Searches text files under a directory with a regex and returns per-file match counts and the first matching lines in at most 8,000 characters. It skips `.git`, `node_modules`, `.venv`, binary files, and files over 5 MB, and respects Git ignore rules.
 - **`contextLines` for `run_dotnet_build`.** Compiler errors can carry `codeContext` like the test tools. `codeContext` is added only for files under `workingDirectory`.
 - **`rerunArgs`.** Failed test runs return arguments that rerun only the failures: failing files for `run_bun_test` and `run_vitest`, `--lf` for `run_pytest`, `--last-failed` for `run_playwright`, and a `--filter` expression for `run_dotnet_test` (VSTest). It is omitted when the report does not list every failure.
 - **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.

@@ -60,7 +60,7 @@ Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` id
 
 ## Build and verification
 
-The compatibility source targets .NET 10 and ModelContextProtocol 2.4.0. On Windows x64 0.8.0, the published MCP entry point is a 0.5 MiB Rust binary that handles UTF-8 Markdown outlines and explicit line ranges locally. It forwards the other tools over stdio to the self-contained, single-file C# compatibility server bundled as `InazumaPwsh.core.exe`; Linux and macOS continue to publish the C# server as the entry point. Native AOT remains disabled for the C# server, while `powershell-worker.ps1` is deployed beside it. NuGet audits direct and transitive dependencies during restore; review the audit and the latest runtime security updates before release.
+The compatibility source targets .NET 10 and ModelContextProtocol 2.4.0. Every platform package starts the Rust MCP entry point. Rust handles UTF-8 Markdown and code outlines, explicit line ranges, `search_files`, and `summarize_log` locally. It forwards persistent PowerShell, diagnostics, symbol reads, PowerShell AST parsing, non-UTF-8 fallback, and other tool paths over stdio to the self-contained, single-file C# core (`InazumaPwsh.core.exe` on Windows and `InazumaPwsh.core` elsewhere). Native AOT remains disabled for the C# core, while `powershell-worker.ps1` is deployed beside it. NuGet and Cargo audit direct and transitive dependencies during release verification; review the audit and latest runtime security updates before release.
 
 From the project directory:
 
@@ -69,7 +69,7 @@ dotnet build InazumaPwsh.csproj --nologo -v:q
 cargo test --release --manifest-path rust/zuma-mcp/Cargo.toml
 node vscode-extension/build-target.mjs win32-x64
 node rust/zuma-mcp/tests/real-smoke.mjs vscode-extension/server/win-x64/InazumaPwsh.exe
-# Build one VSIX per platform: node vscode-extension/build-target.mjs <win32-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64>
+# Build one VSIX on its matching OS/architecture: node vscode-extension/build-target.mjs <win32-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64>
 ```
 
 Reproducibility requires the same source, SDK, runtime, dependencies, and build settings. Path mapping alone is not a guarantee across builds.

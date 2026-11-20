@@ -160,6 +160,22 @@ try {
   const peek = await callTool('peek_file', { path: path.join(root, 'README.md') });
   assert.equal(peek.status, 'success');
   assert.ok(peek.entries.length > 0);
+  const codePeek = await callTool('peek_file', { path: path.join(root, 'FileReadingTools.cs') });
+  assert.ok(codePeek.entries.some(entry => entry.includes('ReadSymbol')));
+  const search = await callTool('search_files', {
+    path: path.join(root, 'README.md'),
+    pattern: 'read_symbol',
+    literal: true,
+    maxResults: 3
+  });
+  assert.ok(search.totalMatches > 0, JSON.stringify(search));
+  assert.ok(search.files.some(file => file.file === 'README.md'));
+  const smokeLog = path.join(tmpdir(), `zuma-real-log-${process.pid}.log`);
+  await writeFile(smokeLog, '0 Error(s)\nreal smoke failure\nfinished');
+  const summary = await callTool('summarize_log', { path: smokeLog, contextLines: 0, tailLines: 1 });
+  await rm(smokeLog, { force: true });
+  assert.equal(summary.matchedLines, 1, JSON.stringify(summary));
+  assert.equal(summary.tail[0], '3: finished');
   const symbol = await callTool('read_symbol', {
     path: path.join(root, 'FileReadingTools.cs'),
     symbol: 'ReadSymbol'
