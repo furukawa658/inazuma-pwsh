@@ -93,11 +93,12 @@ async function verifyTasks() {
     }).response).result;
     assert.equal(completedTask.resultType, 'task', JSON.stringify(completedTask));
     let completed;
-    for (let attempt = 0; attempt < 100; attempt++) {
+    const completedDeadline = Date.now() + 10000;
+    do {
       completed = (await taskRequest('tasks/get', { taskId: completedTask.taskId, _meta: taskMeta }).response).result;
       if (completed.status !== 'working') break;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
+      await new Promise(resolve => setTimeout(resolve, completed.pollIntervalMs ?? 250));
+    } while (Date.now() < completedDeadline);
     assert.equal(completed.status, 'completed', JSON.stringify(completed));
     assert.equal(textResult(completed).data, 42);
 
@@ -113,11 +114,12 @@ async function verifyTasks() {
     }).response;
     assert.equal(taskCancellation.error, undefined, JSON.stringify(taskCancellation.error));
     let cancelled;
-    for (let attempt = 0; attempt < 100; attempt++) {
+    const cancellationDeadline = Date.now() + 10000;
+    do {
       cancelled = (await taskRequest('tasks/get', { taskId: pendingTask.taskId, _meta: taskMeta }).response).result;
       if (cancelled.status === 'cancelled') break;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
+      await new Promise(resolve => setTimeout(resolve, cancelled.pollIntervalMs ?? 250));
+    } while (Date.now() < cancellationDeadline);
     assert.equal(cancelled.status, 'cancelled', JSON.stringify(cancelled));
 
     const unknownTaskRequest = taskRequest('tasks/get', { taskId: 'missing-task', _meta: taskMeta });
