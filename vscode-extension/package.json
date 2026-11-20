@@ -17,13 +17,11 @@
   },
   "homepage": "https://github.com/furukawa658/inazuma-pwsh#readme",
   "engines": { "vscode": "^1.101.0" },
-  "categories": ["AI", "Testing", "Debuggers", "Other"],
+  "categories": ["AI", "Chat", "Testing"],
   "keywords": [
-    "mcp", "model context protocol", "copilot", "agent", "ai",
-    "powershell", "pwsh", "rust", "csharp", "c#", "dotnet", ".net", "msbuild",
-    "typescript", "javascript", "tsc", "bun", "node", "vitest", "playwright",
-    "python", "pytest", "test", "diagnostics", "terminal",
-    "shell", "windows", "bun test", "dotnet test", "ps1"
+    "mcp", "model context protocol", "agent", "copilot", "context",
+    "pwsh", "powershell", "diagnostics", "dotnet", "sarif", "trx",
+    "playwright", "vitest", "bun", "pytest", "eslint", "tsc", "log"
   ],
   "extensionKind": ["ui"],
   "main": "./extension.js",
