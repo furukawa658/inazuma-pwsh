@@ -54,6 +54,14 @@ fn array_tool_parameters_define_items() {
         }),
     ]);
 
+    let initialize_response = responses
+        .iter()
+        .find(|response| response["id"] == 1)
+        .expect("initialize response should be returned");
+    assert_eq!(
+        initialize_response["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"],
+        serde_json::json!({})
+    );
     let list_response = responses
         .iter()
         .find(|response| response["id"] == 2)

@@ -107,6 +107,125 @@ try {
     const execute = listed.result.tools.find(tool => tool.name === 'execute_powershell');
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
+    await check('mcp tasks run long tools asynchronously and cancel them', async () => {
+        assert.deepEqual(initialize.result.capabilities?.extensions?.['io.modelcontextprotocol/tasks'], {});
+        const taskServer = spawn(executable, process.argv.slice(3), {
+            stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '', ZUMA_WORKSPACE_ROOT: root }
+        });
+        const taskPending = new Map();
+        let taskNextId = 0;
+        let taskStderr = '';
+        taskServer.stderr.on('data', chunk => { taskStderr = (taskStderr + chunk).slice(-6000); });
+        createInterface({ input: taskServer.stdout }).on('line', line => {
+            const message = JSON.parse(line);
+            const entry = taskPending.get(message.id);
+            if (!entry) return;
+            taskPending.delete(message.id);
+            clearTimeout(entry.timer);
+            entry.resolve(message);
+        });
+        const taskRequest = (method, params) => {
+            const id = ++taskNextId;
+            const response = new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error(`No response for ${method}: ${taskStderr}`)), 20000);
+                taskPending.set(id, { resolve, reject, timer });
+            });
+            taskServer.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+            return response;
+        };
+        const meta = {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {
+                extensions: { 'io.modelcontextprotocol/tasks': {} }
+            }
+        };
+        try {
+            const project = path.join(fixture, 'mcp-task-playwright');
+            const cliDirectory = path.join(project, 'node_modules', 'playwright');
+            const pidPath = path.join(project, 'pending.pid');
+            await mkdir(cliDirectory, { recursive: true });
+            await writeFile(path.join(cliDirectory, 'cli.js'), `const fs=require('node:fs'); if(process.argv.includes('pending')) { fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(()=>{},1000); } else fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_NAME,JSON.stringify({suites:[],stats:{duration:1}}));`);
+            const create = await taskRequest('tools/call', {
+                name: 'run_playwright',
+                arguments: { workingDirectory: project, testArgs: ['complete'] },
+                _meta: meta
+            });
+            assert.equal(create.error, undefined, JSON.stringify(create.error));
+            assert.equal(create.result.resultType, 'task', JSON.stringify(create.result));
+            assert.equal(create.result.status, 'working');
+            let completed;
+            for (let attempt = 0; attempt < 100; attempt++) {
+                completed = (await taskRequest('tasks/get', { taskId: create.result.taskId, _meta: meta })).result;
+                if (completed.status !== 'working') break;
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            assert.equal(completed.status, 'completed', JSON.stringify(completed));
+            const completedReport = JSON.parse(completed.result.content[0].text);
+            assert.equal(completedReport.status, 'no_tests');
+            assert.deepEqual(
+                [completedReport.stats.total, completedReport.stats.passed, completedReport.stats.failed, completedReport.stats.skipped],
+                [0, 0, 0, 0]
+            );
+
+            const pending = await taskRequest('tools/call', {
+                name: 'run_playwright',
+                arguments: { workingDirectory: project, testArgs: ['pending'] },
+                _meta: meta
+            });
+            assert.equal(pending.result.resultType, 'task');
+            const pidDeadline = Date.now() + 5000;
+            let pendingPid;
+            while (Date.now() < pidDeadline) {
+                try {
+                    pendingPid = Number(await readFile(pidPath, 'utf8'));
+                    if (pendingPid > 0) break;
+                } catch { }
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            assert.ok(pendingPid > 0, 'pending Playwright process did not start');
+            const cancelled = await taskRequest('tasks/cancel', { taskId: pending.result.taskId, _meta: meta });
+            assert.equal(cancelled.error, undefined, JSON.stringify(cancelled.error));
+            let cancellation;
+            for (let attempt = 0; attempt < 100; attempt++) {
+                cancellation = (await taskRequest('tasks/get', { taskId: pending.result.taskId, _meta: meta })).result;
+                if (cancellation.status === 'cancelled') break;
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            assert.equal(cancellation.status, 'cancelled', JSON.stringify(cancellation));
+            const exitDeadline = Date.now() + 5000;
+            let processAlive = true;
+            while (processAlive && Date.now() < exitDeadline) {
+                try { process.kill(pendingPid, 0); }
+                catch (error) {
+                    if (error.code === 'ESRCH') processAlive = false;
+                    else throw error;
+                }
+                if (processAlive) await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            assert.equal(processAlive, false, 'cancelled Playwright process is still running');
+
+            const synchronous = await taskRequest('tools/call', {
+                name: 'peek_file',
+                arguments: { path: fileURLToPath(import.meta.url) },
+                _meta: meta
+            });
+            assert.equal(synchronous.result.resultType, 'complete', JSON.stringify(synchronous.result));
+            assert.equal(synchronous.result.status, undefined, JSON.stringify(synchronous.result));
+        } finally {
+            taskServer.stdin.end();
+            await new Promise(resolve => {
+                if (taskServer.exitCode !== null) return resolve();
+                const timer = setTimeout(() => {
+                    taskServer.kill();
+                    resolve();
+                }, 5000);
+                taskServer.once('exit', () => {
+                    clearTimeout(timer);
+                    resolve();
+                });
+            });
+        }
+    });
     await check('file reading regression outlines expression members and decorators', async () => {
         const cs = path.join(fixture, 'expression.cs');
         await writeFile(cs, ['public class Sample', '{', '    public int Add(int a, int b) => a + b;', '    public int X => 1;', '    public void Declared();', '}'].join('\n'));

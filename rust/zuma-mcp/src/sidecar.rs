@@ -20,6 +20,14 @@ pub struct Sidecar {
 
 impl Sidecar {
     pub fn start() -> Result<Self, String> {
+        Self::start_inner(true)
+    }
+
+    pub fn start_for_tasks() -> Result<Self, String> {
+        Self::start_inner(false)
+    }
+
+    fn start_inner(initialize: bool) -> Result<Self, String> {
         let executable = resolve_executable()?;
         let mut child = Command::new(&executable)
             .arg("--parent-pid")
@@ -65,7 +73,9 @@ impl Sidecar {
             next_id: AtomicU64::new(1),
             process: Mutex::new(child),
         };
-        sidecar.initialize()?;
+        if initialize {
+            sidecar.initialize()?;
+        }
         Ok(sidecar)
     }
 

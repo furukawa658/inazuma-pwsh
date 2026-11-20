@@ -52,6 +52,87 @@ function textResult(message) {
   return JSON.parse(message.result.content.find(item => item.type === 'text').text);
 }
 
+async function verifyTasks() {
+  const taskChild = spawn(executable, [], {
+    cwd: root,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, ZUMA_WORKSPACE_ROOT: root }
+  });
+  const taskPending = new Map();
+  let taskNextId = 1;
+  let taskStderr = '';
+  taskChild.stderr.on('data', chunk => { taskStderr += chunk; });
+  createInterface({ input: taskChild.stdout }).on('line', line => {
+    const message = JSON.parse(line);
+    const waiter = taskPending.get(message.id);
+    if (!waiter) return;
+    taskPending.delete(message.id);
+    clearTimeout(waiter.timer);
+    waiter.resolve(message);
+  });
+  const taskRequest = (method, params, timeoutMs = 120000) => {
+    const id = taskNextId++;
+    const response = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`No task response for ${method}: ${taskStderr}`)), timeoutMs);
+      taskPending.set(id, { resolve, reject, timer });
+    });
+    taskChild.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    return { id, response };
+  };
+  const taskMeta = {
+    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+    'io.modelcontextprotocol/clientCapabilities': {
+      extensions: { 'io.modelcontextprotocol/tasks': {} }
+    }
+  };
+  try {
+    const completedTask = (await taskRequest('tools/call', {
+      name: 'execute_powershell',
+      arguments: { script: 'Start-Sleep -Milliseconds 50; 42', sessionId: 'task-complete' },
+      _meta: taskMeta
+    }).response).result;
+    assert.equal(completedTask.resultType, 'task', JSON.stringify(completedTask));
+    let completed;
+    const completedDeadline = Date.now() + 10000;
+    do {
+      completed = (await taskRequest('tasks/get', { taskId: completedTask.taskId, _meta: taskMeta }).response).result;
+      if (completed.status !== 'working') break;
+      await new Promise(resolve => setTimeout(resolve, completed.pollIntervalMs ?? 250));
+    } while (Date.now() < completedDeadline);
+    assert.equal(completed.status, 'completed', JSON.stringify(completed));
+    assert.equal(textResult(completed).data, 42);
+
+    const pendingTask = (await taskRequest('tools/call', {
+      name: 'execute_powershell',
+      arguments: { script: 'Start-Sleep -Seconds 10', sessionId: 'task-cancel' },
+      _meta: taskMeta
+    }).response).result;
+    assert.equal(pendingTask.resultType, 'task');
+    const taskCancellation = await taskRequest('tasks/cancel', {
+      taskId: pendingTask.taskId,
+      _meta: taskMeta
+    }).response;
+    assert.equal(taskCancellation.error, undefined, JSON.stringify(taskCancellation.error));
+    let cancelled;
+    const cancellationDeadline = Date.now() + 10000;
+    do {
+      cancelled = (await taskRequest('tasks/get', { taskId: pendingTask.taskId, _meta: taskMeta }).response).result;
+      if (cancelled.status === 'cancelled') break;
+      await new Promise(resolve => setTimeout(resolve, cancelled.pollIntervalMs ?? 250));
+    } while (Date.now() < cancellationDeadline);
+    assert.equal(cancelled.status, 'cancelled', JSON.stringify(cancelled));
+
+    const unknownTaskRequest = taskRequest('tasks/get', { taskId: 'missing-task', _meta: taskMeta });
+    const unknownTask = await unknownTaskRequest.response;
+    assert.equal(unknownTask.id, unknownTaskRequest.id);
+    assert.equal(unknownTask.error.code, -32602);
+    assert.equal(unknownTask.result, undefined);
+  } finally {
+    taskChild.stdin.end();
+    taskChild.kill();
+  }
+}
+
 try {
   const initialized = await request('initialize', {
     protocolVersion: '2024-11-05',
@@ -66,6 +147,8 @@ try {
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
+  assert.deepEqual(initialized.result.capabilities.extensions['io.modelcontextprotocol/tasks'], {});
+  await verifyTasks();
 
   const callTool = async (name, args, timeoutMs) => {
     const response = await request('tools/call', { name, arguments: args }, timeoutMs).response;
