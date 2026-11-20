@@ -58,6 +58,10 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
 
+### Asynchronous tool calls
+
+Clients using MCP protocol revision `2026-07-28` and the `io.modelcontextprotocol/tasks` extension can request `execute_powershell` and the build, test, lint, and type-check tools as MCP Tasks. The server returns a task handle immediately; clients poll with `tasks/get` and can signal cancellation with `tasks/cancel`. Clients without Tasks opt-in keep the synchronous responses. File-reading, log, and trace tools remain synchronous.
+
 ## Try it in a chat
 
 After installing the extension and approving its MCP tools, ask your agent to use Zuma MCP. For example:

@@ -66,6 +66,52 @@ try {
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
+  assert.deepEqual(initialized.result.capabilities.extensions['io.modelcontextprotocol/tasks'], {});
+
+  const taskMeta = {
+    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+    'io.modelcontextprotocol/clientCapabilities': {
+      extensions: { 'io.modelcontextprotocol/tasks': {} }
+    }
+  };
+  const taskCall = async (script, sessionId) => request('tools/call', {
+    name: 'execute_powershell',
+    arguments: { script, sessionId },
+    _meta: taskMeta
+  }).response;
+  const completedTask = await taskCall('Start-Sleep -Milliseconds 50; 42', 'task-complete');
+  assert.equal(completedTask.result.resultType, 'task', JSON.stringify(completedTask.result));
+  let completed;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    completed = (await request('tasks/get', { taskId: completedTask.result.taskId, _meta: taskMeta }).response).result;
+    if (completed.status !== 'working') break;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(completed.status, 'completed', JSON.stringify(completed));
+  assert.equal(textResult(completed).data, 42);
+
+  const pendingTask = await taskCall('Start-Sleep -Seconds 10', 'task-cancel');
+  assert.equal(pendingTask.result.resultType, 'task');
+  const taskCancellation = await request('tasks/cancel', {
+    taskId: pendingTask.result.taskId,
+    _meta: taskMeta
+  }).response;
+  assert.equal(taskCancellation.error, undefined, JSON.stringify(taskCancellation.error));
+  let cancelled;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    cancelled = (await request('tasks/get', { taskId: pendingTask.result.taskId, _meta: taskMeta }).response).result;
+    if (cancelled.status === 'cancelled') break;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(cancelled.status, 'cancelled', JSON.stringify(cancelled));
+  const unknownTaskRequest = request('tasks/get', {
+    taskId: 'missing-task',
+    _meta: taskMeta
+  });
+  const unknownTask = await unknownTaskRequest.response;
+  assert.equal(unknownTask.id, unknownTaskRequest.id);
+  assert.equal(unknownTask.error.code, -32602);
+  assert.equal(unknownTask.result, undefined);
 
   const callTool = async (name, args, timeoutMs) => {
     const response = await request('tools/call', { name, arguments: args }, timeoutMs).response;

@@ -79,12 +79,14 @@ fn watch_parent(process_id: u32) {
 
 struct Bridge {
     sidecar: Mutex<Option<Arc<Sidecar>>>,
+    task_sidecar: Mutex<Option<Arc<Sidecar>>>,
 }
 
 impl Bridge {
     fn new() -> Self {
         Self {
             sidecar: Mutex::new(None),
+            task_sidecar: Mutex::new(None),
         }
     }
 
@@ -96,8 +98,26 @@ impl Bridge {
         Ok(Arc::clone(sidecar.as_ref().unwrap()))
     }
 
+    fn task_sidecar(&self) -> Result<Arc<Sidecar>, String> {
+        let mut sidecar = self.task_sidecar.lock().unwrap();
+        if sidecar.is_none() {
+            *sidecar = Some(Arc::new(Sidecar::start_for_tasks()?));
+        }
+        Ok(Arc::clone(sidecar.as_ref().unwrap()))
+    }
+
     fn request_for(&self, client_id: &Value, method: &str, params: Value) -> Result<Value, String> {
         self.sidecar()?.request_for(Some(client_id), method, params)
+    }
+
+    fn task_request_for(
+        &self,
+        client_id: &Value,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        self.task_sidecar()?
+            .request_for(Some(client_id), method, params)
     }
 
     fn cancel(&self, params: &Value) -> Result<(), String> {
@@ -470,6 +490,42 @@ fn tool_definitions() -> Value {
     ] })
 }
 
+fn uses_task_protocol(params: &Value) -> bool {
+    params
+        .get("_meta")
+        .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(Value::as_str)
+        .is_some_and(|version| version >= "2026-07-28")
+}
+
+fn forward_response(response: Result<Value, String>) -> Value {
+    match response {
+        Ok(response) if response.get("result").is_some() => response["result"].clone(),
+        Ok(response) => json!({
+            "content": [{ "type": "text", "text": response["error"].to_string() }],
+            "isError": true
+        }),
+        Err(error) => json!({
+            "content": [{ "type": "text", "text": error }],
+            "isError": true
+        }),
+    }
+}
+
+fn forward_protocol_response(client_id: &Value, response: Result<Value, String>) -> Value {
+    match response {
+        Ok(mut response) => {
+            response["id"] = client_id.clone();
+            response
+        }
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": client_id,
+            "error": { "code": -32603, "message": error }
+        }),
+    }
+}
+
 fn can_handle_locally(name: &str, arguments: &Value) -> bool {
     let Some(path) = arguments.get("path").and_then(Value::as_str) else {
         return false;
@@ -498,6 +554,10 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
         }
     };
 
+    if uses_task_protocol(params) {
+        return forward_response(bridge.task_request_for(client_id, "tools/call", params.clone()));
+    }
+
     if can_handle_locally(name, arguments) {
         let payload = if name == "peek_file" {
             peek_file(arguments)
@@ -511,13 +571,7 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
         return json!({ "content": [{ "type": "text", "text": response }] });
     }
 
-    match bridge.request_for(client_id, "tools/call", params.clone()) {
-        Ok(response) if response.get("result").is_some() => response["result"].clone(),
-        Ok(response) => {
-            json!({ "content": [{ "type": "text", "text": response["error"].to_string() }], "isError": true })
-        }
-        Err(error) => json!({ "content": [{ "type": "text", "text": error }], "isError": true }),
-    }
+    forward_response(bridge.request_for(client_id, "tools/call", params.clone()))
 }
 
 fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
@@ -530,10 +584,26 @@ fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
         return None;
     };
 
+    if request.method == "tools/list" && uses_task_protocol(&request.params) {
+        return Some(forward_protocol_response(
+            &id,
+            bridge.task_request_for(&id, &request.method, request.params),
+        ));
+    }
+    if matches!(request.method.as_str(), "tasks/get" | "tasks/update" | "tasks/cancel") {
+        return Some(forward_protocol_response(
+            &id,
+            bridge.task_request_for(&id, &request.method, request.params),
+        ));
+    }
+
     let result = match request.method.as_str() {
         "initialize" => json!({
             "protocolVersion": request.params.get("protocolVersion").cloned().unwrap_or_else(|| json!("2024-11-05")),
-            "capabilities": { "tools": { "listChanged": false } },
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "extensions": { "io.modelcontextprotocol/tasks": {} }
+            },
             "serverInfo": { "name": "Zuma", "version": VERSION }
         }),
         "ping" => json!({}),

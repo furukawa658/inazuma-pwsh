@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Extensions.Tasks;
 using ModelContextProtocol.Server;
 using InazumaPwsh;
 using System.Diagnostics;
@@ -33,12 +34,39 @@ builder.Logging.AddConsole(options =>
 // 常駐型PowerShellセッションをシングルトン登録
 builder.Services.AddSingleton<ConcurrentPowerShellManager>();
 
+var taskStore = new InMemoryMcpTaskStore
+{
+    DefaultPollIntervalMs = 250,
+    DefaultTimeToLive = TimeSpan.FromHours(1)
+};
+var asynchronousTools = new HashSet<string>(StringComparer.Ordinal)
+{
+    "execute_powershell",
+    "run_dotnet_build",
+    "run_dotnet_test",
+    "run_affected_tests",
+    "run_playwright",
+    "run_bun_test",
+    "run_pytest",
+    "run_vitest",
+    "run_tsc",
+    "run_eslint",
+    "run_cargo_check"
+};
+
 // MCPサーバーの設定: stdioトランスポートとPowerShellTools
 builder.Services.AddMcpServer()
     .WithStdioServerTransport()
     .WithTools<PowerShellTools>()
     .WithTools<DiagnosticTools>()
-    .WithTools<FileReadingTools>();
+    .WithTools<FileReadingTools>()
+    .WithTasks(taskStore, options =>
+    {
+        options.ExecutionModeSelector = request =>
+            asynchronousTools.Contains(request.Params?.Name ?? string.Empty)
+                ? McpTaskExecutionMode.Optional
+                : McpTaskExecutionMode.Synchronous;
+    });
 
 using var host = builder.Build();
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();

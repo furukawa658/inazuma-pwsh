@@ -28,6 +28,16 @@ The test runner tools manage their report options: `run_bun_test` rejects `--rep
 
 For the five test runners, `compactResponse: true` removes test progress, failure details and temporary report paths when a report is parsed successfully, retaining summaries and other output such as warnings or collection errors. Empty compact output is omitted. When a report is unavailable or execution is interrupted, output is not filtered. Set `compactResponse: false` to retain the raw output tail. The response size limit still applies; use `fullLogPath` for the complete log.
 
+## MCP Tasks
+
+The server supports the `io.modelcontextprotocol/tasks` extension with protocol revision `2026-07-28` or later. The client opts in on a request by adding the extension to `_meta/io.modelcontextprotocol/clientCapabilities/extensions` and setting `_meta/io.modelcontextprotocol/protocolVersion` to a task-capable revision.
+
+Task execution is optional for `execute_powershell`, `run_dotnet_build`, `run_dotnet_test`, `run_affected_tests`, `run_playwright`, `run_bun_test`, `run_pytest`, `run_vitest`, `run_tsc`, `run_eslint`, and `run_cargo_check`. An opted-in call returns `resultType: "task"`; the client uses `tasks/get` to obtain `working`, `completed`, `failed`, or `cancelled` state. A completed task contains the same `CallToolResult` returned by a synchronous call. `tasks/cancel` signals cooperative cancellation and normally cancels the underlying process; the task state may briefly remain `working` until cleanup finishes.
+
+Task records are kept in memory for one hour and are lost when the server process exits. The suggested polling interval is 250 ms. Calls to file-reading, log-summary, search, and trace tools remain synchronous. A client that uses an older protocol revision or does not opt in receives the existing synchronous result.
+
+On Windows, the Rust front end uses a separate compatibility server process for task-capable 2026 requests. This keeps those requests independent from the existing 2024 initialized sidecar and its persistent sessions.
+
 ## File-reading tools
 
 `peek_file` returns outline entries as strings in `start-end level title` form. `maxLevel` optionally filters out deeper entries before the `maxEntries` limit. Python definition ranges include preceding decorators; C# expression-bodied members are included.
