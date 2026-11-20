@@ -39,6 +39,7 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | --- | --- |
 | `run_dotnet_build` | Run a build and return the exit code and SARIF compiler diagnostics. Warnings are omitted by default. |
 | `run_dotnet_test` | Run `dotnet test` and return test counts and failures with file, line, message, and stack from its TRX reports. |
+| `run_affected_tests` | Select tests from Git changes, untracked files, naming conventions, and relative imports, then run each detected runner once. |
 | `run_playwright` | Run locally installed Playwright and return test counts, failures, and attachment paths from its JSON report. |
 | `inspect_playwright_trace` | Inspect a trace ZIP for failed actions, HTTP and console errors, and a DOM excerpt. |
 | `run_bun_test` | Run `bun test` and return test counts and failures with file, line, message, and stack from its JUnit XML report. |
@@ -46,6 +47,7 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | `run_vitest` | Run locally installed Vitest once (`vitest run`) and return test counts, failures, and file-level errors from its JSON report. |
 | `run_tsc` | Run the locally installed TypeScript compiler (`tsc --noEmit`) and return diagnostics with file, line, column, code, and message. |
 | `run_eslint` | Run the locally installed ESLint and return counts, per-rule counts, and problems with file, line, column, rule, and message. |
+| `run_cargo_check` | Run `cargo check` and return Rust compiler errors and warnings with file, line, column, code, and message. |
 
 ### File and log reading
 
@@ -53,8 +55,17 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | --- | --- |
 | `peek_file` | Return a text file's type, encoding, line count, outline with line ranges, and a `FULL` or `PARTIAL` reading recommendation. |
 | `read_section` | Return one outline entry by title search, or a line range, with line numbers and a `nextLine` for continuation. |
+| `read_symbol` | Return one exact named declaration from a code file, including decorators and the complete symbol range. Overloads can be selected with `occurrence`. |
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
+
+### Rust file tools
+
+Every packaged platform starts the Rust MCP front end. It handles UTF-8 Markdown and code outlines, explicit line ranges, Git-aware `search_files`, and `summarize_log` without starting the .NET compatibility core. PowerShell, diagnostics, symbol reads, and encoding fallback continue through the self-contained C# core.
+
+### Asynchronous tool calls
+
+Clients using MCP protocol revision `2026-07-28` and the `io.modelcontextprotocol/tasks` extension can request PowerShell, build, test, lint, and type-check tools as MCP Tasks. Clients without Tasks opt-in retain synchronous responses. File-reading, log, and trace tools remain synchronous.
 
 ## Try it in a chat
 
@@ -68,9 +79,16 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "Run `bun test` with Zuma MCP and show me the failing files and lines."
 - "Run Vitest with Zuma MCP for `src/utils` only and explain why the import failed."
 - "Peek at this design document with Zuma MCP, then read only the section about approvals."
+- "Read the `RunAsync` symbol in this C# file, then fix the cancellation path."
 - "Summarize the errors in this build log with Zuma MCP before opening it."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
+
+## What's new in 0.9.0
+
+- Every packaged platform starts the Rust front end. UTF-8 code outlines, Git-aware search, and log summaries run locally, while the C# compatibility core retains PowerShell, diagnostics, symbol reads, and non-UTF-8 fallback.
+- Long-running PowerShell, build, test, lint, and type-check calls can return MCP Tasks for polling and cancellation. Clients without Tasks opt-in keep synchronous responses.
+- `read_symbol` reads exact declarations and resolves overloads with `occurrence`. Test and diagnostic tools add affected-test selection, new-diagnostic filtering, regression-only reports, Rust checks, and bounded failure summaries.
 
 ## What's new in 0.8.2
 
@@ -115,7 +133,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 
 - **`run_dotnet_test`.** Runs `dotnet test` and returns test counts and failures with file, line, message, and stack from its TRX reports. VSTest is verified with a mock project; the Microsoft.Testing.Platform path (selected by `global.json`) has not been run against a real project.
 - **`run_eslint`.** Runs the locally installed ESLint and returns error and warning counts, per-rule counts, and the first 15 problems.
-- **`search_files`.** Searches text files under a directory with a regex and returns per-file match counts and the first matching lines in at most 8,000 characters. It skips `.git`, `node_modules`, `.venv`, binary files, and files over 5 MB, and does not apply `.gitignore`.
+- **`search_files`.** Searches text files under a directory with a regex and returns per-file match counts and the first matching lines in at most 8,000 characters. It skips `.git`, `node_modules`, `.venv`, binary files, and files over 5 MB, and respects Git ignore rules.
 - **`contextLines` for `run_dotnet_build`.** Compiler errors can carry `codeContext` like the test tools. `codeContext` is added only for files under `workingDirectory`.
 - **`rerunArgs`.** Failed test runs return arguments that rerun only the failures: failing files for `run_bun_test` and `run_vitest`, `--lf` for `run_pytest`, `--last-failed` for `run_playwright`, and a `--filter` expression for `run_dotnet_test` (VSTest). It is omitted when the report does not list every failure.
 - **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.
@@ -127,7 +145,7 @@ Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa
 
 - VS Code 1.101 or later. Windows x64 is the verified platform; Linux (x64, arm64) and macOS (x64, arm64) are supported but experimental (see "Notes").
 - External PowerShell 7 (`pwsh.exe` on Windows, `pwsh` on Linux/macOS) installed on the system (only PowerShell 7.7.0 has been verified in practice). The server searches `PATH` first, then the standard install locations (Windows: `%ProgramFiles%\PowerShell\7`, `%LOCALAPPDATA%\Microsoft\WindowsApps`, `%USERPROFILE%\.dotnet\tools`; Linux/macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/snap/bin`, `~/.dotnet/tools`), or you can specify an explicit executable path via the `inazumaPwsh.pwshPath` setting or `INAZUMA_PWSH_PATH` environment variable. An invalid explicit path fails immediately without fallback.
-- The extension bundles the server binary, the Windows x64 C# compatibility server where applicable, and the worker script (`powershell-worker.ps1`). The worker script runs under the external PowerShell 7 process to manage session runspaces.
+- The extension bundles a Rust MCP server, a self-contained C# compatibility core, and the worker script (`powershell-worker.ps1`) for every platform. The worker script runs under the external PowerShell 7 process to manage session runspaces.
 - A trusted workspace. The extension runs in the local extension host, including when a remote workspace is open; it does not switch to the remote shell or filesystem.
 - Install the VSIX for your platform (win32-x64, linux-x64, linux-arm64, darwin-x64 or darwin-arm64) using **Extensions: Install from VSIX** or from the Visual Studio Code Marketplace. The extension registers its MCP server automatically; no `mcp.json` entry is required. Follow VS Code's prompts to trust the workspace, start the server, and approve tool calls.
 - Build diagnostics require the .NET SDK; Playwright diagnostics require Node.js and a locally installed Playwright package. `run_bun_test` requires Bun on `PATH`, `run_pytest` requires a Python interpreter with pytest installed, and `run_vitest` requires Node.js and a locally installed Vitest package.

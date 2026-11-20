@@ -1,3 +1,4 @@
+mod file_tools;
 mod sidecar;
 
 use serde::Deserialize;
@@ -199,7 +200,7 @@ fn record_usage(tool: &str, source: &Path, response: &str) {
     let source_bytes = fs::metadata(source)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
-    let entry = if source_bytes == 0 {
+    let entry = if tool == "search_files" || source_bytes == 0 {
         json!({ "time": time, "tool": tool, "countOnly": true })
     } else {
         json!({ "time": time, "tool": tool, "sourceBytes": source_bytes, "responseBytes": response.len() })
@@ -224,17 +225,17 @@ fn record_usage(tool: &str, source: &Path, response: &str) {
 
 fn validate_pwsh_environment() -> Result<PathBuf, String> {
     let executable = if cfg!(windows) { "pwsh.exe" } else { "pwsh" };
-    if let Some(explicit) = env::var_os("INAZUMA_PWSH_PATH") {
-        if !explicit.is_empty() {
-            let path = PathBuf::from(explicit);
-            if path.is_file() {
-                return Ok(path.canonicalize().unwrap_or(path));
-            }
-            return Err(format!(
-                "The specified INAZUMA_PWSH_PATH does not exist: {}. Fix or clear inazumaPwsh.pwshPath (INAZUMA_PWSH_PATH).",
-                path.display()
-            ));
+    if let Some(explicit) = env::var_os("INAZUMA_PWSH_PATH")
+        && !explicit.is_empty()
+    {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Ok(path.canonicalize().unwrap_or(path));
         }
+        return Err(format!(
+            "The specified INAZUMA_PWSH_PATH does not exist: {}. Fix or clear inazumaPwsh.pwshPath (INAZUMA_PWSH_PATH).",
+            path.display()
+        ));
     }
 
     let mut directories = env::var_os("PATH")
@@ -370,9 +371,19 @@ fn peek_file(arguments: &Value) -> Value {
     let kind = determine_kind(path);
     let mut entries = if kind == "markdown" {
         markdown_outline(&lines)
+    } else if kind == "code" {
+        file_tools::code_outline(
+            &lines,
+            path.extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("py")),
+        )
     } else {
         text_outline(&lines)
     };
+    if entries.is_empty() && !lines.is_empty() {
+        entries = text_outline(&lines);
+    }
     let max_entries = integer_argument(arguments, "maxEntries", 200).clamp(10, 1000);
     if let Some(max_level) = arguments.get("maxLevel").and_then(Value::as_u64) {
         entries.retain(|entry| entry.level <= max_level as usize);
@@ -532,18 +543,58 @@ fn can_handle_locally(name: &str, arguments: &Value) -> bool {
         return false;
     };
     let path = Path::new(path);
-    if fs::read_to_string(path).is_err() {
-        return false;
-    }
     match name {
-        "peek_file" => determine_kind(path) == "markdown",
+        "search_files" => {
+            path.is_absolute()
+                && (path.is_dir() || path.is_file())
+                && rust_regex_supported(arguments, "pattern", None)
+        }
+        "summarize_log" => {
+            path.is_absolute()
+                && fs::read_to_string(path).is_ok()
+                && rust_regex_supported(
+                    arguments,
+                    "pattern",
+                    Some("error|fail|exception|fatal|warn|エラー|警告|失敗|例外"),
+                )
+        }
+        "peek_file" => {
+            if fs::read_to_string(path).is_err() {
+                return false;
+            }
+            let kind = determine_kind(path);
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("");
+            kind == "markdown"
+                || (kind == "code"
+                    && !matches!(extension.to_ascii_lowercase().as_str(), "ps1" | "psm1"))
+        }
         "read_section" => {
-            arguments.get("query").is_none()
+            fs::read_to_string(path).is_ok()
+                && arguments.get("query").is_none()
                 && arguments.get("ranges").is_none()
                 && arguments.get("startLine").and_then(Value::as_u64).is_some()
         }
         _ => false,
     }
+}
+
+fn rust_regex_supported(arguments: &Value, name: &str, default: Option<&str>) -> bool {
+    let Some(pattern) = arguments.get(name).and_then(Value::as_str).or(default) else {
+        return false;
+    };
+    let literal = arguments
+        .get("literal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let expression = if literal {
+        regex::escape(pattern)
+    } else {
+        pattern.to_string()
+    };
+    regex::RegexBuilder::new(&expression).build().is_ok()
 }
 
 fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
@@ -560,10 +611,12 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
     }
 
     if can_handle_locally(name, arguments) {
-        let payload = if name == "peek_file" {
-            peek_file(arguments)
-        } else {
-            read_section(arguments)
+        let payload = match name {
+            "peek_file" => peek_file(arguments),
+            "read_section" => read_section(arguments),
+            "search_files" => file_tools::search_files(arguments),
+            "summarize_log" => file_tools::summarize_log(arguments),
+            _ => unreachable!(),
         };
         let response = payload.to_string();
         if let Some(path) = arguments.get("path").and_then(Value::as_str) {
@@ -591,7 +644,10 @@ fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
             bridge.task_request_for(&id, &request.method, request.params),
         ));
     }
-    if matches!(request.method.as_str(), "tasks/get" | "tasks/update" | "tasks/cancel") {
+    if matches!(
+        request.method.as_str(),
+        "tasks/get" | "tasks/update" | "tasks/cancel"
+    ) {
         return Some(forward_protocol_response(
             &id,
             bridge.task_request_for(&id, &request.method, request.params),

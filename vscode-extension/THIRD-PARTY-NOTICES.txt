@@ -5,9 +5,9 @@ Do Not Translate or Localize
 
 InazumaPwsh incorporates third-party software components.
 This file contains notice and license information for components included
-in the InazumaPwsh release payload (win-x64-0.2.0).
+in the InazumaPwsh release payloads for Windows, Linux, and macOS.
 
-Target runtime: Microsoft .NET Core 10.0 (win-x64)
+Target runtimes: Microsoft .NET Core 10.0 compatibility cores and native Rust front ends
 PowerShell integration: External PowerShell execution via powershell-worker.ps1
 Note: PowerShell SDK, System.Management.Automation, MMI, SNI, and SqlClient
 are not bundled in InazumaPwsh.
@@ -50,19 +50,30 @@ TABLE OF RUNTIME COMPONENTS AND LICENSES
 - ModelContextProtocol.Core/2.4.0                         [License: Apache-2.0]
 - System.Diagnostics.EventLog/10.0.0                      [License: MIT]
 
-Rust front end runtime components on win32-x64:
+Rust front end runtime components on all platform packages:
 
 - Rust standard library                                    [License: MIT OR Apache-2.0, with LLVM exception]
+- aho-corasick/1.1.5                                       [License: Unlicense OR MIT]
+- cfg-if/1.0.5                                             [License: MIT OR Apache-2.0]
+- core_detect/1.0.0                                        [License: MIT OR Apache-2.0]
+- encoding_rs/0.8.44                                       [License: (Apache-2.0 OR MIT) AND BSD-3-Clause]
+- itoa/1.0.19                                               [License: MIT OR Apache-2.0]
+- memchr/2.8.3                                              [License: Unlicense OR MIT]
+- multiversion_no_op/1.0.0                                 [License: Apache-2.0 OR MIT]
+- regex/1.13.2                                              [License: MIT OR Apache-2.0]
+- regex-automata/0.4.19                                    [License: MIT OR Apache-2.0]
+- regex-syntax/0.8.12                                      [License: MIT OR Apache-2.0]
+- scopeguard/1.2.0                                         [License: MIT OR Apache-2.0]
 - serde/1.0.229                                             [License: MIT OR Apache-2.0]
 - serde_core/1.0.229                                        [License: MIT OR Apache-2.0]
 - serde_json/1.0.154                                        [License: MIT OR Apache-2.0]
-- itoa/1.0.19                                               [License: MIT OR Apache-2.0]
-- memchr/2.8.3                                              [License: Unlicense OR MIT]
+- simdutf8/0.1.5                                            [License: MIT OR Apache-2.0]
 - zmij/1.0.23                                               [License: MIT]
 
-Rust build-time procedural components are proc-macro2/1.0.107,
-quote/1.0.47, serde_derive/1.0.229, syn/3.0.10, and
+Rust build-time components are proc-macro2/1.0.107, quote/1.0.47,
+rustversion/1.0.23, serde_derive/1.0.229, syn/3.0.10, and
 unicode-ident/1.0.27. Their Cargo metadata records MIT or Apache-2.0;
+encoding_rs additionally requires the WHATWG BSD-3-Clause notice, and
 unicode-ident additionally requires the Unicode-3.0 notice. Source and
 license files are available from crates.io and each crate repository.
 
