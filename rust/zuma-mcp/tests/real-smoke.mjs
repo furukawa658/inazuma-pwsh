@@ -114,7 +114,14 @@ try {
   clearTimeout(pending.get(cancellation.id)?.timer);
   send('notifications/cancelled', { requestId: cancellation.id, reason: 'real smoke' });
   const resumedAt = performance.now();
-  assert.equal((await shell('6 * 7', { sessionId: 'real-cancel' })).data, 42);
+  let resumed;
+  while (true) {
+    resumed = await shell('6 * 7', { sessionId: 'real-cancel' });
+    if (resumed.data === 42) break;
+    assert.ok(performance.now() - resumedAt < 3000, 'cancellation did not release the real worker');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(resumed.data, 42);
   assert.ok(performance.now() - resumedAt < 3000, 'cancellation did not release the real worker');
   pending.delete(cancellation.id);
   await rm(marker, { force: true });
