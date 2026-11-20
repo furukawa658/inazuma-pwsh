@@ -19,7 +19,7 @@ public static class PlaywrightResultParser
     private record Attachment([property: JsonPropertyName("name")] string Name, [property: JsonPropertyName("path")] string Path, [property: JsonPropertyName("contentType")] string ContentType);
     private record Failure([property: JsonPropertyName("title")] string Title, [property: JsonPropertyName("file")] string File, [property: JsonPropertyName("line")] int Line, [property: JsonPropertyName("column")] int Column, [property: JsonPropertyName("projectName")] string ProjectName, [property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("expectedStatus")] string ExpectedStatus, [property: JsonPropertyName("retry")] int Retry, [property: JsonPropertyName("errors")] List<ErrorDetail> Errors, [property: JsonPropertyName("attachments")] List<Attachment> Attachments);
     private record Stats([property: JsonPropertyName("duration")] double Duration, [property: JsonPropertyName("passed")] int Passed, [property: JsonPropertyName("failed")] int Failed, [property: JsonPropertyName("flaky")] int Flaky, [property: JsonPropertyName("skipped")] int Skipped, [property: JsonPropertyName("total")] int Total);
-    private record PlaywrightReport([property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("exitCode")] int ExitCode, [property: JsonPropertyName("stats")] Stats Stats, [property: JsonPropertyName("globalErrors")] List<string> GlobalErrors, [property: JsonPropertyName("failures")] List<Failure> Failures);
+    private record PlaywrightReport([property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("exitCode")] int ExitCode, [property: JsonPropertyName("stats")] Stats Stats, [property: JsonPropertyName("globalErrors")] List<string> GlobalErrors, [property: JsonPropertyName("failures")] List<Failure> Failures, [property: JsonPropertyName(TestRegressionFilter.PassedTestsProperty)] List<string>? PassedTests);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -34,13 +34,13 @@ public static class PlaywrightResultParser
         if (string.IsNullOrWhiteSpace(reportPath) || !File.Exists(reportPath))
         {
             var fallbackStatus = exitCode == 0 ? "report_unavailable" : "error";
-            return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), [], []), JsonOptions);
+            return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), [], [], null), JsonOptions);
         }
 
         try
         {
             if (new FileInfo(reportPath).Length > 50 * 1024 * 1024)
-                return JsonSerializer.Serialize(new PlaywrightReport("report_unavailable", exitCode, new Stats(0, 0, 0, 0, 0, 0), ["Report file exceeded 50MB limit."], []), JsonOptions);
+                return JsonSerializer.Serialize(new PlaywrightReport("report_unavailable", exitCode, new Stats(0, 0, 0, 0, 0, 0), ["Report file exceeded 50MB limit."], [], null), JsonOptions);
 
             await using var stream = new FileStream(reportPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -48,13 +48,13 @@ public static class PlaywrightResultParser
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
             {
                 var fallbackStatus = exitCode == 0 ? "report_unavailable" : "error";
-                return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), ["Root of Playwright report must be an object."], []), JsonOptions);
+                return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), ["Root of Playwright report must be an object."], [], null), JsonOptions);
             }
 
             if (!doc.RootElement.TryGetProperty("suites", out var suites) || suites.ValueKind != JsonValueKind.Array)
             {
                 var fallbackStatus = exitCode == 0 ? "report_unavailable" : "error";
-                return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), ["Playwright report missing valid suites array schema."], []), JsonOptions);
+                return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), ["Playwright report missing valid suites array schema."], [], null), JsonOptions);
             }
 
             var globalErrors = new List<string>();
@@ -70,25 +70,26 @@ public static class PlaywrightResultParser
             double duration = doc.RootElement.TryGetProperty("stats", out var statsElem) && statsElem.ValueKind == JsonValueKind.Object && statsElem.TryGetProperty("duration", out var dur) && dur.TryGetDouble(out var durVal) ? durVal : 0;
             int passed = 0, failed = 0, flaky = 0, skipped = 0;
             var failures = new List<Failure>();
+            var passedTests = new List<string>();
 
             foreach (var suite in suites.EnumerateArray())
-                TraverseSuite(suite, workingDirectory, failures, ref passed, ref failed, ref flaky, ref skipped);
+                TraverseSuite(suite, workingDirectory, failures, passedTests, ref passed, ref failed, ref flaky, ref skipped);
 
             int total = passed + failed + flaky + skipped;
             string status = total == 0
                 ? (exitCode == 0 && globalErrors.Count == 0 ? "no_tests" : "error")
                 : (exitCode != 0 || failed > 0 || globalErrors.Count > 0 ? "error" : "success");
 
-            return SerializeWithLimit(status, exitCode, new Stats(duration, passed, failed, flaky, skipped, total), globalErrors, failures);
+            return SerializeWithLimit(status, exitCode, new Stats(duration, passed, failed, flaky, skipped, total), globalErrors, failures, passedTests);
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or FormatException or OverflowException)
         {
             var fallbackStatus = exitCode == 0 ? "report_unavailable" : "error";
-            return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), [ex.Message], []), JsonOptions);
+            return JsonSerializer.Serialize(new PlaywrightReport(fallbackStatus, exitCode, new Stats(0, 0, 0, 0, 0, 0), [ex.Message], [], null), JsonOptions);
         }
     }
 
-    private static void TraverseSuite(JsonElement suite, string workingDir, List<Failure> failures, ref int passed, ref int failed, ref int flaky, ref int skipped)
+    private static void TraverseSuite(JsonElement suite, string workingDir, List<Failure> failures, List<string> passedTests, ref int passed, ref int failed, ref int flaky, ref int skipped)
     {
         if (suite.ValueKind != JsonValueKind.Object) return;
         var suiteFile = suite.TryGetProperty("file", out var sf) ? sf.GetString() ?? "" : "";
@@ -124,7 +125,11 @@ public static class PlaywrightResultParser
                     if (isUnexp) failed++;
                     else if (isFlaky) flaky++;
                     else if (isSkip) skipped++;
-                    else passed++;
+                    else
+                    {
+                        passed++;
+                        passedTests.Add(TestRegressionFilter.Identity(file, proj, title));
+                    }
 
                     if (isUnexp && failures.Count < 10)
                     {
@@ -136,7 +141,7 @@ public static class PlaywrightResultParser
         }
 
         if (suite.TryGetProperty("suites", out var childSuites) && childSuites.ValueKind == JsonValueKind.Array)
-            foreach (var child in childSuites.EnumerateArray()) TraverseSuite(child, workingDir, failures, ref passed, ref failed, ref flaky, ref skipped);
+            foreach (var child in childSuites.EnumerateArray()) TraverseSuite(child, workingDir, failures, passedTests, ref passed, ref failed, ref flaky, ref skipped);
     }
 
     private static List<ErrorDetail> CollectErrors(List<JsonElement> results)
@@ -197,9 +202,9 @@ public static class PlaywrightResultParser
         catch { return path.Replace('\\', '/'); }
     }
 
-    private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures)
+    private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures, List<string> passedTests)
     {
-        var report = JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, globalErrors, failures), JsonOptions);
+        var report = JsonSerializer.Serialize(new PlaywrightReport(status, exitCode, stats, globalErrors, failures, passedTests), JsonOptions);
         return DiagnosticBudget.Fit(report, 5500, "failures", "globalErrors");
     }
 

@@ -28,7 +28,7 @@ public static class TestReportParser
     private record ErrorDetail([property: JsonPropertyName("message")] string Message, [property: JsonPropertyName("stack")] string Stack);
     private record Failure([property: JsonPropertyName("title")] string Title, [property: JsonPropertyName("file")] string File, [property: JsonPropertyName("line")] int Line, [property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("errors")] List<ErrorDetail> Errors, [property: JsonPropertyName("count")] int? Count = null);
     private record Stats([property: JsonPropertyName("duration")] double Duration, [property: JsonPropertyName("passed")] int Passed, [property: JsonPropertyName("failed")] int Failed, [property: JsonPropertyName("skipped")] int Skipped, [property: JsonPropertyName("total")] int Total, [property: JsonPropertyName("errors")] int Errors = 0);
-    private record TestReport([property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("exitCode")] int ExitCode, [property: JsonPropertyName("stats")] Stats Stats, [property: JsonPropertyName("globalErrors")] List<string> GlobalErrors, [property: JsonPropertyName("failures")] List<Failure> Failures);
+    private record TestReport([property: JsonPropertyName("status")] string Status, [property: JsonPropertyName("exitCode")] int ExitCode, [property: JsonPropertyName("stats")] Stats Stats, [property: JsonPropertyName("globalErrors")] List<string> GlobalErrors, [property: JsonPropertyName("failures")] List<Failure> Failures, [property: JsonPropertyName(TestRegressionFilter.PassedTestsProperty)] List<string>? PassedTests = null);
 
     private sealed class Accumulator
     {
@@ -36,6 +36,7 @@ public static class TestReportParser
         public double Duration;
         public List<string> GlobalErrors { get; } = [];
         public List<Failure> Failures { get; } = [];
+        public List<string> PassedTests { get; } = [];
 
         /// <summary>Failures at the same location with the same message are kept once with a count.</summary>
         public void AddFailure(Failure failure)
@@ -86,7 +87,15 @@ public static class TestReportParser
                     result.AddFailure(ToFailure(testCase, problem, workingDirectory) with { Status = isError ? "error" : "failed" });
                 }
                 else if (testCase.Elements().Any(e => e.Name.LocalName == "skipped")) result.Skipped++;
-                else result.Passed++;
+                else
+                {
+                    result.Passed++;
+                    var name = testCase.Attribute("name")?.Value ?? "";
+                    var className = testCase.Attribute("classname")?.Value ?? "";
+                    var title = className.Length > 0 && className != name ? $"{className} > {name}" : name;
+                    var file = testCase.Attribute("file")?.Value ?? "";
+                    result.PassedTests.Add(TestRegressionFilter.Identity(PlaywrightResultParser.Truncate(PlaywrightResultParser.ToRelativePath(file, workingDirectory), 300), null, title));
+                }
             }
             return result;
         });
@@ -119,11 +128,16 @@ public static class TestReportParser
                 {
                     if (assertion.ValueKind != JsonValueKind.Object) continue;
                     var status = GetString(assertion, "status");
-                    if (status == "passed") { result.Passed++; continue; }
-                    if (status != "failed") { result.Skipped++; continue; }
-                    result.Failed++;
                     var title = GetString(assertion, "fullName");
                     if (title.Length == 0) title = GetString(assertion, "title");
+                    if (status == "passed")
+                    {
+                        result.Passed++;
+                        result.PassedTests.Add(TestRegressionFilter.Identity(relativeFile, null, PlaywrightResultParser.Truncate(title, 300)));
+                        continue;
+                    }
+                    if (status != "failed") { result.Skipped++; continue; }
+                    result.Failed++;
                     var messages = assertion.TryGetProperty("failureMessages", out var fm) && fm.ValueKind == JsonValueKind.Array
                         ? fm.EnumerateArray().Where(m => m.ValueKind == JsonValueKind.String).Select(m => PlaywrightResultParser.StripAnsi(m.GetString())).ToList() : [];
                     int line = assertion.TryGetProperty("location", out var loc) && loc.ValueKind == JsonValueKind.Object && loc.TryGetProperty("line", out var l) && l.TryGetInt32(out var lVal) ? lVal : 0;
@@ -174,7 +188,12 @@ public static class TestReportParser
                     cancellationToken.ThrowIfCancellationRequested();
                     if (TimeSpan.TryParse(item.Attribute("duration")?.Value, CultureInfo.InvariantCulture, out var duration)) result.Duration += duration.TotalMilliseconds;
                     var outcome = item.Attribute("outcome")?.Value ?? "";
-                    if (outcome == "Passed") { result.Passed++; continue; }
+                    if (outcome == "Passed")
+                    {
+                        result.Passed++;
+                        result.PassedTests.Add(TestRegressionFilter.Identity("", null, item.Attribute("testName")?.Value ?? ""));
+                        continue;
+                    }
                     if (outcome is not ("Failed" or "Error" or "Timeout" or "Aborted")) { result.Skipped++; continue; }
                     result.Failed++;
 
@@ -218,7 +237,7 @@ public static class TestReportParser
         string status = total == 0
             ? (noTests && result.GlobalErrors.Count == 0 ? "no_tests" : "error")
             : (exitCode != 0 || result.Failed > 0 || result.Errors > 0 || result.GlobalErrors.Count > 0 ? "error" : "success");
-        return SerializeWithLimit(status, exitCode, new Stats(Math.Round(result.Duration, 1), result.Passed, result.Failed, result.Skipped, total, result.Errors), result.GlobalErrors, result.Failures);
+        return SerializeWithLimit(status, exitCode, new Stats(Math.Round(result.Duration, 1), result.Passed, result.Failed, result.Skipped, total, result.Errors), result.GlobalErrors, result.Failures, result.PassedTests);
     }
 
     private static async Task<string> ParseAsync(string reportPath, int exitCode, int? noTestsExitCode, CancellationToken cancellationToken,
@@ -302,9 +321,9 @@ public static class TestReportParser
 
     private static string Serialize(TestReport report) => JsonSerializer.Serialize(report, JsonOptions);
 
-    private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures)
+    private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures, List<string>? passedTests = null)
     {
-        var report = Serialize(new TestReport(status, exitCode, stats, globalErrors, failures));
+        var report = Serialize(new TestReport(status, exitCode, stats, globalErrors, failures, passedTests));
         return DiagnosticBudget.Fit(report, 5500, "failures", "globalErrors");
     }
 }
