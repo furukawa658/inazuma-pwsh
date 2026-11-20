@@ -141,7 +141,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 - **`regressionsOnly`.** `run_dotnet_test`, `run_playwright`, `run_bun_test`, `run_pytest`, and `run_vitest` can keep only tests that passed in the previous run with the same arguments and failed in the current run. Total stats stay unchanged and `regressionCount` reports the kept transitions.
 - **`onlyNew` diagnostics.** `run_dotnet_build`, `run_eslint`, `run_cargo_check`, and `run_tsc` list only diagnostics absent from the previous run with the same arguments, and return `newCount` and `fixedCount`. The previous result is kept in memory until the server stops. For `run_tsc`, `--build` and `-b` are accepted and omit `--noEmit`.
 
-Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.2/CHANGELOG.md).
+Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.9.0/CHANGELOG.md).
 
 ## Requirements and installation
 
@@ -158,7 +158,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 
 - Zuma MCP was formerly InazumaPwsh; the extension ID (`ShunsukeF.inazuma-pwsh`), setting keys (`inazumaPwsh.*`), environment variables, executable names, and the log folder keep their inazuma names for compatibility.
 - Linux and macOS are experimental. On Linux/macOS there is no Job Object, so workers may be orphaned if the server process crashes.
-- Details on sessions, output limits, cancellation, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.2/docs/reference.md).
+- Details on sessions, output limits, cancellation, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.9.0/docs/reference.md).
 
 ### Sessions and output
 

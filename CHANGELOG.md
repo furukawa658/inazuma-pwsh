@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 (Unreleased)
+## 0.9.0
 
 - Run the Rust MCP front end on every packaged platform. UTF-8 code outlines, Git-aware file search, and log summaries execute locally in Rust; the self-contained C# server is retained as the compatibility core for PowerShell, diagnostics, non-UTF-8 file fallback, symbol reads, and the remaining tools.
 - Add optional MCP Tasks execution for long-running PowerShell, build, test, lint, and type-check calls. Task-aware clients can poll results and cancel work while existing clients retain synchronous calls.
