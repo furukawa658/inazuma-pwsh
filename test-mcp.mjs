@@ -107,6 +107,7 @@ try {
     const execute = listed.result.tools.find(tool => tool.name === 'execute_powershell');
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
+    assert.ok(listed.result.tools.some(tool => tool.name === 'read_symbol'));
     await check('mcp tasks run long tools asynchronously and cancel them', async () => {
         assert.deepEqual(initialize.result.capabilities?.extensions?.['io.modelcontextprotocol/tasks'], {});
         const taskServer = spawn(executable, process.argv.slice(3), {
@@ -225,6 +226,45 @@ try {
                 });
             });
         }
+    });
+    await check('read_symbol selects exact C# declarations and Python decorators', async () => {
+        const cs = path.join(fixture, 'symbols.cs');
+        await writeFile(cs, [
+            'public class Sample',
+            '{',
+            '    public void Save() { Console.WriteLine("save"); }',
+            '    public void Run(int value)',
+            '    {',
+            '        Console.WriteLine(value);',
+            '    }',
+            '    public void Run(string value)',
+            '    {',
+            '        Console.WriteLine(value);',
+            '    }',
+            '}'
+        ].join('\n'));
+        const unique = await tool('read_symbol', { path: cs, symbol: 'Save' });
+        assert.equal(unique.status, 'success');
+        assert.equal(unique.title, 'public void Save() { Console.WriteLine("save"); }');
+        assert.deepEqual([unique.startLine, unique.symbolEndLine], [3, 3]);
+        assert.match(unique.text, /3:     public void Save/);
+        const ambiguous = await tool('read_symbol', { path: cs, symbol: 'Run' });
+        assert.equal(ambiguous.status, 'ambiguous');
+        assert.deepEqual(ambiguous.matches.map(match => match.title), [
+            'public void Run(int value)',
+            'public void Run(string value)'
+        ]);
+        const selected = await tool('read_symbol', { path: cs, symbol: 'Run', occurrence: 2 });
+        assert.equal(selected.title, 'public void Run(string value)');
+        assert.deepEqual([selected.startLine, selected.symbolEndLine], [8, 11]);
+        assert.ok(!selected.text.includes('Run(int'));
+
+        const py = path.join(fixture, 'symbols.py');
+        await writeFile(py, ['@staticmethod', 'def decorated():', '    return 42', '', 'def other():', '    return 0'].join('\n'));
+        const decorated = await tool('read_symbol', { path: py, symbol: 'decorated' });
+        assert.equal(decorated.status, 'success');
+        assert.deepEqual([decorated.startLine, decorated.symbolEndLine], [1, 3]);
+        assert.match(decorated.text, /^1: @staticmethod/m);
     });
     await check('file reading regression outlines expression members and decorators', async () => {
         const cs = path.join(fixture, 'expression.cs');

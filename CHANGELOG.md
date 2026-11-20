@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `read_symbol` to read an exact named code declaration, including Python decorators, with overload disambiguation through `occurrence` and bounded continuation metadata.
 - Add optional MCP Tasks execution for long-running PowerShell, build, test, lint, and type-check calls. Task-aware clients can poll results and cancel work while existing clients retain synchronous calls. The Windows Rust front end routes task-capable requests through a separate compatibility process.
 
 ## 0.8.2

@@ -65,6 +65,18 @@ internal static partial class FileOutline
     private static readonly Regex CodeVbRegex = new(
         @"^(Public|Private|Protected|Friend|Shared|\s)*\s*(Sub|Function|Class|Module|Property)\s+\w+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex DeclarationKeywordRegex = new(
+        @"\b(?:class|interface|struct|record|enum|namespace|module|type|function|def|fn|func|sub|property)\s+(?<name>[\p{L}_][\p{L}\p{Nd}_-]*)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ParenthesizedDeclarationRegex = new(
+        @"(?<name>[\p{L}_][\p{L}\p{Nd}_]*)\s*(?:<[^(){}]+>)?\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ExpressionDeclarationRegex = new(
+        @"(?<name>[\p{L}_][\p{L}\p{Nd}_]*)\s*=>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex JsonKeyRegex = new(@"^\s{0,4}""([^""]+)""\s*:", RegexOptions.Compiled);
 
     private static readonly Regex YamlKeyRegex = new(@"^([A-Za-z0-9_""'.-][^:#]*):", RegexOptions.Compiled);
@@ -145,6 +157,95 @@ internal static partial class FileOutline
             ".yml" or ".yaml" => "yaml",
             _ => "text"
         };
+    }
+
+    public static string? GetDeclaredSymbol(string title)
+    {
+        if (DeclarationKeywordRegex.Match(title) is { Success: true } keyword)
+            return keyword.Groups["name"].Value;
+        if (ParenthesizedDeclarationRegex.Match(title) is { Success: true } parenthesized)
+            return parenthesized.Groups["name"].Value;
+        if (ExpressionDeclarationRegex.Match(title) is { Success: true } expression)
+            return expression.Groups["name"].Value;
+        return null;
+    }
+
+    public static int GetDeclaredEnd(string path, string[] lines, OutlineEntry entry)
+    {
+        string extension = Path.GetExtension(path).ToLowerInvariant();
+        int end = Math.Clamp(entry.End, entry.Start, lines.Length);
+        if (extension == ".py")
+        {
+            int declarationLine = entry.Start - 1;
+            while (declarationLine < end && lines[declarationLine].TrimStart().StartsWith('@')) declarationLine++;
+            int declarationIndent = IndentationWidth(lines[declarationLine]);
+            for (int index = declarationLine + 1; index < end; index++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[index])) continue;
+                if (IndentationWidth(lines[index]) <= declarationIndent)
+                {
+                    end = index;
+                    break;
+                }
+            }
+        }
+        else if (extension is ".cs" or ".ts" or ".tsx" or ".js" or ".jsx" or ".mjs" or ".cjs" or ".go" or ".rs" or ".java" or ".kt")
+        {
+            int balance = 0;
+            bool sawOpeningBrace = false;
+            for (int index = entry.Start - 1; index < end; index++)
+            {
+                int delta = BraceDelta(lines[index]);
+                if (delta > 0) sawOpeningBrace = true;
+                balance += delta;
+                if (sawOpeningBrace && balance <= 0) return index + 1;
+                if (!sawOpeningBrace && lines[index].TrimEnd().EndsWith(';')) return index + 1;
+            }
+        }
+        else if (extension == ".vb")
+        {
+            for (int index = end - 1; index >= entry.Start - 1; index--)
+                if (Regex.IsMatch(lines[index], @"^\s*End\s+(Sub|Function|Class|Module|Property)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                    return index + 1;
+        }
+
+        while (end > entry.Start && string.IsNullOrWhiteSpace(lines[end - 1])) end--;
+        return end;
+    }
+
+    private static int IndentationWidth(string line)
+    {
+        int width = 0;
+        foreach (char character in line)
+        {
+            if (character == ' ') width++;
+            else if (character == '\t') width += 4;
+            else break;
+        }
+        return width;
+    }
+
+    private static int BraceDelta(string line)
+    {
+        int delta = 0;
+        char quote = '\0';
+        bool escaped = false;
+        for (int index = 0; index < line.Length; index++)
+        {
+            char character = line[index];
+            if (quote != '\0')
+            {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = '\0';
+                continue;
+            }
+            if (character is '"' or '\'' or '`') quote = character;
+            else if (character == '/' && index + 1 < line.Length && line[index + 1] == '/') break;
+            else if (character == '{') delta++;
+            else if (character == '}') delta--;
+        }
+        return delta;
     }
 
     public static List<OutlineEntry> GetOutline(string path, string[] lines, string? kind = null)

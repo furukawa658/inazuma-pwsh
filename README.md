@@ -55,6 +55,7 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | --- | --- |
 | `peek_file` | Return a text file's type, encoding, line count, outline with line ranges, and a `FULL` or `PARTIAL` reading recommendation. |
 | `read_section` | Return one outline entry by title search, or a line range, with line numbers and a `nextLine` for continuation. |
+| `read_symbol` | Return one exact named declaration from a code file, including decorators and the complete symbol range. Overloads can be selected with `occurrence`. |
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
 
@@ -74,6 +75,7 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "Run `bun test` with Zuma MCP and show me the failing files and lines."
 - "Run Vitest with Zuma MCP for `src/utils` only and explain why the import failed."
 - "Peek at this design document with Zuma MCP, then read only the section about approvals."
+- "Read the `RunAsync` symbol in this C# file, then fix the cancellation path."
 - "Summarize the errors in this build log with Zuma MCP before opening it."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.

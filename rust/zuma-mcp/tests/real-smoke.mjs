@@ -143,10 +143,11 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 18);
+  assert.equal(tools.result.tools.length, 19);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
+  assert.ok(tools.result.tools.some(tool => tool.name === 'read_symbol'));
   assert.deepEqual(initialized.result.capabilities.extensions['io.modelcontextprotocol/tasks'], {});
   await verifyTasks();
 
@@ -159,6 +160,12 @@ try {
   const peek = await callTool('peek_file', { path: path.join(root, 'README.md') });
   assert.equal(peek.status, 'success');
   assert.ok(peek.entries.length > 0);
+  const symbol = await callTool('read_symbol', {
+    path: path.join(root, 'FileReadingTools.cs'),
+    symbol: 'ReadSymbol'
+  });
+  assert.equal(symbol.status, 'success');
+  assert.match(symbol.text, /ReadSymbol\(string path/);
   const usagePath = path.join(tmpdir(), 'inazuma-pwsh-logs', 'usage.jsonl');
   const usageRows = (await readFile(usagePath, 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.ok(usageRows.some(row => row.tool === 'peek_file' && row.sourceBytes > 0 && row.responseBytes > 0));
@@ -221,7 +228,7 @@ try {
   }, 200000);
   await rm(buildProject, { recursive: true, force: true });
   assert.equal(build.status, 'success', JSON.stringify(build));
-  console.log('REAL_SMOKE_OK tools=18 parallel=true cancellation=true dotnet_build=success');
+  console.log('REAL_SMOKE_OK tools=19 parallel=true cancellation=true dotnet_build=success');
 } finally {
   child.stdin.end();
   child.kill();

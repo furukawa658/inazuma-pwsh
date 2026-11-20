@@ -67,9 +67,10 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 19);
     assert!(tools.iter().any(|tool| tool["name"] == "run_affected_tests"));
     assert!(tools.iter().any(|tool| tool["name"] == "run_cargo_check"));
+    assert!(tools.iter().any(|tool| tool["name"] == "read_symbol"));
     for name in ["run_dotnet_build", "run_eslint", "run_tsc", "run_cargo_check"] {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
         assert_eq!(tool["inputSchema"]["properties"]["onlyNew"]["type"], "boolean");
