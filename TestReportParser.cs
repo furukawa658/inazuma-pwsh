@@ -304,27 +304,7 @@ public static class TestReportParser
 
     private static string SerializeWithLimit(string status, int exitCode, Stats stats, List<string> globalErrors, List<Failure> failures)
     {
-        var steps = new (int Failures, int Title, int Message, int StackLines, int Globals, int Global)[]
-        {
-            (MaxFailures, 300, 500, 4, 10, 400), (10, 150, 200, 2, 5, 200), (3, 100, 150, 1, 2, 150), (2, 80, 100, 0, 1, 100), (1, 40, 50, 0, 1, 50)
-        };
-        string json = "";
-        foreach (var step in steps)
-        {
-            var curF = failures.Take(step.Failures).Select(f => f with
-            {
-                Title = PlaywrightResultParser.Truncate(f.Title, step.Title),
-                File = PlaywrightResultParser.Truncate(f.File, Math.Max(step.Title, 50)),
-                Errors = f.Errors.Take(step.StackLines == 0 ? 1 : 3).Select(e => e with
-                {
-                    Message = PlaywrightResultParser.Truncate(e.Message, step.Message),
-                    Stack = PlaywrightResultParser.ClipLines(e.Stack, step.StackLines)
-                }).ToList()
-            }).ToList();
-            var curG = globalErrors.Take(step.Globals).Select(g => PlaywrightResultParser.Truncate(g, step.Global)).ToList();
-            json = Serialize(new TestReport(status, exitCode, stats, curG, curF));
-            if (json.Length <= 5500) return json;
-        }
-        return json;
+        var report = Serialize(new TestReport(status, exitCode, stats, globalErrors, failures));
+        return DiagnosticBudget.Fit(report, 5500, "failures", "globalErrors");
     }
 }
