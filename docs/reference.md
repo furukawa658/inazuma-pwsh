@@ -62,6 +62,8 @@ Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` id
 
 The compatibility source targets .NET 10 and ModelContextProtocol 2.4.0. Every platform package starts the Rust MCP entry point. Rust handles UTF-8 Markdown and code outlines, explicit line ranges, `search_files`, and `summarize_log` locally. It forwards persistent PowerShell, diagnostics, symbol reads, PowerShell AST parsing, non-UTF-8 fallback, and other tool paths over stdio to the self-contained, single-file C# core (`InazumaPwsh.core.exe` on Windows and `InazumaPwsh.core` elsewhere). Native AOT remains disabled for the C# core, while `powershell-worker.ps1` is deployed beside it. NuGet and Cargo audit direct and transitive dependencies during release verification; review the audit and latest runtime security updates before release.
 
+The .NET 10 Native AOT evaluation can link the `win-x64` binary, but the build reports 50 `IL2026` and 50 `IL3050` warnings from reflection-based JSON serialization. More importantly, the resulting process fails before `initialize`: ModelContextProtocol and Microsoft.Extensions.AI cannot resolve source-generated `JsonTypeInfo` metadata for `JsonElement[]` while constructing the MCP tools. Do not enable AOT in the packaging workflow. Re-evaluate only after the MCP SDK supports this registration path under AOT or the application supplies a complete `JsonSerializerContext`, and require the full packaged MCP suite to initialize and pass after that migration.
+
 From the project directory:
 
 ```powershell
