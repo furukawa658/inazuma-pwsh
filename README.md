@@ -72,7 +72,11 @@ After installing the extension and approving its MCP tools, ask your agent to us
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
-## What's new in 0.8.1
+## What's new in 0.8.2
+
+This patch fixes the Windows Rust MCP front end so `read_section.ranges` declares its array item schema and VS Code can validate all registered tools.
+
+## 0.8.1
 
 This patch fixes Linux and macOS Marketplace packaging so all platform variants can be published consistently.
 
@@ -117,7 +121,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 - **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.
 - **`run_tsc` additions.** `onlyNew: true` lists only diagnostics that the previous run with the same `workingDirectory` and `tscArgs` did not have, with `newCount` and `fixedCount`; the previous result is kept in memory until the server stops. `--build` and `-b` are accepted and omit `--noEmit`.
 
-Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.1/CHANGELOG.md).
+Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.2/CHANGELOG.md).
 
 ## Requirements and installation
 
@@ -134,7 +138,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 
 - Zuma MCP was formerly InazumaPwsh; the extension ID (`ShunsukeF.inazuma-pwsh`), setting keys (`inazumaPwsh.*`), environment variables, executable names, and the log folder keep their inazuma names for compatibility.
 - Linux and macOS are experimental. On Linux/macOS there is no Job Object, so workers may be orphaned if the server process crashes.
-- Details on sessions, output limits, cancellation, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.1/docs/reference.md).
+- Details on sessions, output limits, cancellation, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.2/docs/reference.md).
 
 ### Sessions and output
 

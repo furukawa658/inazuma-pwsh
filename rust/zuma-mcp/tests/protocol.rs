@@ -33,6 +33,47 @@ fn call(requests: &[Value]) -> Vec<Value> {
 }
 
 #[test]
+fn array_tool_parameters_define_items() {
+    let responses = call(&[
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } }
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+    ]);
+
+    let list_response = responses
+        .iter()
+        .find(|response| response["id"] == 2)
+        .expect("tools/list response should be returned");
+    let tools = list_response["result"]["tools"].as_array().unwrap();
+    for tool in tools {
+        for (name, schema) in tool["inputSchema"]["properties"].as_object().unwrap() {
+            if schema["type"] == "array" {
+                assert!(
+                    schema.get("items").is_some(),
+                    "{}.{} is an array without items",
+                    tool["name"],
+                    name
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn initializes_and_calls_file_tools() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
