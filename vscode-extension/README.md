@@ -1,10 +1,10 @@
-<p align="center"><img src="https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/v0.5.1/vscode-extension/media/icon.png" alt="Zuma MCP icon" width="128"></p>
+<p align="center"><img src="media/icon.png" alt="Zuma MCP icon" width="128"></p>
 
 # Zuma MCP
 
-**Your coding agent reads 7% of a design document and 1% of a build log, not 100%.**
+**Your coding agent reads 7% of a design document and 1% of a build log—not 100%.**
 
-![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/v0.5.1/vscode-extension/media/before-after.gif)
+![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](media/before-after.gif)
 
 | Input | Full read | With Zuma MCP | Characters returned |
 | --- | --- | --- | --- |
@@ -14,24 +14,26 @@
 
 These are single-file measurements. Savings across complete chats have not been measured.
 
-Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent local PowerShell 7 sessions. Reuse variables, modules, and your working location across tool calls; investigate .NET build, TypeScript (`tsc`), Playwright, bun test, pytest, and Vitest failures through structured diagnostics; and read large files and logs by outline, section, or summary, with full logs available when you need the details.
+Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust file/search engine, structured build and test diagnostics, and persistent local PowerShell 7 sessions. Instead of loading entire files and terminal dumps into chat, inspect an outline, read an exact symbol or section, summarize a log, run only affected tests, and drill down to a full report only when needed.
 
-## Why use Zuma MCP?
+## Why Developers Use Zuma MCP
 
-- **Set up once, continue working.** Keep a runspace ready for the next command instead of repeating imports and recreating variables on every call.
-- **Give each chat its own working state.** Separate session IDs keep variables, modules, locations, and worker process environments independent. Different sessions can execute concurrently; files and other operating system resources remain shared.
-- **Keep long output out of the conversation.** Bounded responses and optional duplicate-output removal keep routine results concise. Full logs remain available for follow-up searches. Token and credit savings have not been measured across complete chats.
-- **Start troubleshooting with evidence.** Retrieve compiler diagnostics, test failure summaries, attachment paths, and trace findings without manually copying entire terminal logs into chat.
-- **Automatic MCP integration.** The extension registers its MCP server automatically in VS Code. It bundles the server binary and worker script (`powershell-worker.ps1`), launching external PowerShell 7 workers on demand. Project-specific SDKs and test dependencies remain required.
+- **Cut context bloat:** Inspect file outlines, read exact symbols or sections, and summarize logs before loading raw text into chat.
+- **Start on native Rust:** Every packaged platform starts a lightweight Rust MCP front end for UTF-8 file outlines, Git-aware search, and log summaries.
+- **Find only new regressions:** Run tests affected by Git changes, filter compiler and lint diagnostics to new findings, and keep only newly failing test transitions.
+- **Keep shell state alive:** Reuse variables, modules, import state, and the current directory across PowerShell calls in a dedicated chat session.
+- **Non-blocking long work:** Task-aware MCP clients can poll and cancel PowerShell, build, test, lint, and type-check operations while existing clients keep synchronous calls.
+- **Automatic VS Code integration:** The extension registers its MCP server and bundles the Rust front end, C# compatibility core, and PowerShell worker. No manual `mcp.json` setup is required.
 
-## Tools
+## Available Tools (19 Tools)
 
-### Persistent shell
+### Persistent PowerShell 7 Sessions
 
 | Tool | Purpose |
 | --- | --- |
-| `execute_powershell` | Run a script in a persistent session and return structured data, output, errors, exit code, and a full-log path when truncated. |
-| `reset_powershell_session` | Recreate one worker and its session environment. It does not undo changes to files or user/machine environment settings. |
+| `execute_powershell` | Run a script in a persistent session and return structured data, output, errors, exit code, and `fullLogPath` when truncated. |
+| `list_powershell_sessions` | List active sessions with location, creation time, last-used time, and busy state. |
+| `reset_powershell_session` | Recreate one worker and its session state. Files and OS environment settings are not reverted. |
 
 ### Structured diagnostics
 
@@ -59,9 +61,9 @@ Zuma MCP (formerly InazumaPwsh) connects your VS Code coding agent to persistent
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
 
-### Rust file tools
+### Native Rust + C# Architecture
 
-Every packaged platform starts the Rust MCP front end. It handles UTF-8 Markdown and code outlines, explicit line ranges, Git-aware `search_files`, and `summarize_log` without starting the .NET compatibility core. PowerShell, diagnostics, symbol reads, and encoding fallback continue through the self-contained C# core.
+Every packaged platform starts the Rust MCP front end for UTF-8 Markdown and code outlines, explicit line ranges, Git-aware search, and log summaries. It forwards PowerShell sessions, AST parsing, symbol reads, non-UTF-8 fallback, and build/test diagnostics to the self-contained C# compatibility core when required.
 
 ### Asynchronous tool calls
 
@@ -121,7 +123,7 @@ This release changes response formats to reduce repeated output:
 
 #### See how much you save
 
-![Savings in the status bar: peek_file 93%, read_section 89%, summarize_log 97%, 95% in total](https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/v0.6.0/vscode-extension/media/savings.gif)
+![Savings in the status bar: peek_file 93%, read_section 89%, summarize_log 97%, 95% in total](media/savings.gif)
 
 The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it, or run **Zuma MCP: Show Savings**, for the breakdown by tool: number of calls, bytes read, and bytes returned.
 
@@ -165,7 +167,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 - There are at most six sessions, including `default`. Idle sessions expire after 10 minutes.
 - `maxOutputChars` limits `output` to 1,000 through 50,000 characters, with a default of 6,000. When output is truncated, the full log is saved locally.
 
-Timeouts, `compactResponse`, Python standard input, and the limits of each diagnostic tool are described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).
+Timeouts, `compactResponse`, Python standard input, MCP Tasks, and the limits of each diagnostic tool are described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.9.0/docs/reference.md).
 
 ### Safety and logs
 
@@ -173,8 +175,8 @@ Scripts run with the current user's permissions. Zuma MCP is not a security sand
 
 Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` identifies an execution log; `fullReportPath`, when present, identifies detailed structured diagnostics. Logs older than 3 days, or beyond 200 MB in total, are deleted at server startup, and they may contain sensitive output. Review and remove them when no longer needed.
 
-Cancellation and timeout behavior is described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).
+Cancellation and timeout behavior is described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.9.0/docs/reference.md).
 
 ### Build and verification
 
-Build commands, reproducibility notes, and the limits of the test suite are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.8.0/docs/reference.md).
+Build commands, reproducibility notes, and the limits of the test suite are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.9.0/docs/reference.md).
