@@ -38,6 +38,24 @@ Task records are kept in memory for one hour and are lost when the server proces
 
 On Windows, the Rust front end uses a separate compatibility server process for task-capable 2026 requests. This keeps those requests independent from the existing 2024 initialized sidecar and its persistent sessions.
 
+## Execution gate
+
+`get_execution_gate`, `set_execution_gate`, and `reset_execution_gate` expose the 0.10.0 execution policy. The gate is disabled with `inazumaPwsh.executionGuard.enabled`; it is enabled by default.
+
+The available modes are:
+
+- `manual`: Preserve normal full-test behavior. The repeat-failure circuit breaker remains active.
+- `incremental`: Block an unscoped full suite and direct the caller to `run_affected_tests` or a specific file/filter.
+- `milestone`: Allow full regression suites.
+
+The circuit breaker records a normalized command, a structured failure signature, and a Git diff fingerprint in the same workspace scope across typed diagnostic tools and PowerShell test commands. A circuit trips at `repeatFailureThreshold` identical failures, which defaults to 3 and is bounded from 2 through 10. `historySeconds` defaults to 120 and is bounded from 10 through 3600. The next execution is blocked until the command or Git diff changes, the history expires, the server restarts, or the gate is reset.
+
+`reset_execution_gate` clears all history by default. A `workspaceKey` clears only one workspace scope. `set_execution_gate` can change mode, enablement, threshold, retention, and `skipRedPhase` without restarting the server.
+
+When `skipRedPhase` is true, a test run is blocked if Git reports only test-file changes. The setting is false by default because reproduction tests, test infrastructure, and test-only corrections are legitimate full workflows.
+
+VS Code exposes these settings under `inazumaPwsh.executionGuard.*`. The status bar shows the current mode or `Breaker tripped`; **Zuma MCP: Reset Execution Gate** restarts the server definition to obtain an empty process history. The server also writes minimal state to `%TEMP%/inazuma-pwsh-logs/execution-gate.json` for status display. This file contains mode and tripped workspace keys, not command output.
+
 ## File-reading tools
 
 `peek_file` returns outline entries as strings in `start-end level title` form. `maxLevel` optionally filters out deeper entries before the `maxEntries` limit. Python definition ranges include preceding decorators; C# expression-bodied members are included.

@@ -67,12 +67,19 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 22);
     assert!(
         tools
             .iter()
             .any(|tool| tool["name"] == "run_affected_tests")
     );
+    for name in [
+        "get_execution_gate",
+        "set_execution_gate",
+        "reset_execution_gate",
+    ] {
+        assert!(tools.iter().any(|tool| tool["name"] == name), "missing {name}");
+    }
     assert!(tools.iter().any(|tool| tool["name"] == "run_cargo_check"));
     assert!(tools.iter().any(|tool| tool["name"] == "read_symbol"));
     for name in [

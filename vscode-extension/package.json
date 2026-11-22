@@ -2,7 +2,7 @@
   "name": "inazuma-pwsh",
   "displayName": "Zuma MCP",
   "description": "Persistent PowerShell sessions and structured .NET, Playwright, bun test, pytest, and Vitest diagnostics for AI coding in VS Code on Windows, Linux, and macOS.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "ShunsukeF",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -39,6 +39,46 @@
           "default": "",
           "scope": "machine",
           "description": "Absolute path to an installed pwsh (pwsh.exe on Windows). Leave empty to use INAZUMA_PWSH_PATH or search PATH. An invalid explicit path fails without fallback. Restart the MCP server after changing this setting."
+        },
+        "inazumaPwsh.executionGuard.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Enable Zuma execution-loop detection and test execution policy checks."
+        },
+        "inazumaPwsh.executionGuard.mode": {
+          "type": "string",
+          "enum": ["manual", "incremental", "milestone"],
+          "enumDescriptions": [
+            "Preserve normal test execution behavior while the repeat-failure circuit breaker remains active.",
+            "Block unscoped full test runs and direct the agent to run_affected_tests or a specific target.",
+            "Allow full regression suites."
+          ],
+          "default": "manual",
+          "scope": "resource",
+          "description": "Zuma execution policy for the active workspace."
+        },
+        "inazumaPwsh.executionGuard.repeatFailureThreshold": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 10,
+          "default": 3,
+          "scope": "resource",
+          "description": "Number of identical failures with the same command and Git diff before Zuma trips the circuit breaker."
+        },
+        "inazumaPwsh.executionGuard.historySeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600,
+          "default": 120,
+          "scope": "resource",
+          "description": "Retention window for repeat-failure detection."
+        },
+        "inazumaPwsh.executionGuard.skipRedPhase": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Block test execution when only test files changed, requiring an implementation change or an explicit gate reset."
         }
       }
     },
@@ -46,7 +86,9 @@
       { "id": "inazuma-pwsh.server", "label": "Zuma MCP" }
     ],
     "commands": [
-      { "command": "inazumaPwsh.showSavings", "title": "Zuma MCP: Show Savings" }
+      { "command": "inazumaPwsh.showSavings", "title": "Zuma MCP: Show Savings" },
+      { "command": "inazumaPwsh.selectExecutionGateMode", "title": "Zuma MCP: Select Execution Gate Mode" },
+      { "command": "inazumaPwsh.resetExecutionGate", "title": "Zuma MCP: Reset Execution Gate" }
     ]
   },
   "files": [
@@ -59,11 +101,11 @@
   ],
   "scripts": {
     "test": "node test-extension.cjs",
-    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.9.0-win32-x64.vsix",
-    "package:linux-x64": "vsce package --target linux-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.9.0-linux-x64.vsix",
-    "package:linux-arm64": "vsce package --target linux-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.9.0-linux-arm64.vsix",
-    "package:darwin-x64": "vsce package --target darwin-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.9.0-darwin-x64.vsix",
-    "package:darwin-arm64": "vsce package --target darwin-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.9.0-darwin-arm64.vsix"
+    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.10.0-win32-x64.vsix",
+    "package:linux-x64": "vsce package --target linux-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.10.0-linux-x64.vsix",
+    "package:linux-arm64": "vsce package --target linux-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.10.0-linux-arm64.vsix",
+    "package:darwin-x64": "vsce package --target darwin-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.10.0-darwin-x64.vsix",
+    "package:darwin-arm64": "vsce package --target darwin-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.10.0-darwin-arm64.vsix"
   },
   "devDependencies": {
     "@types/vscode": "1.101.0",

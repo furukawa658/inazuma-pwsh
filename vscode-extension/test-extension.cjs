@@ -8,12 +8,16 @@ async function main() {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
     let provider;
     let configuredPath = '';
-    let configurationChanged;
+    const configurationListeners = [];
     let changeCount = 0;
+    const configurationChanged = event => configurationListeners.forEach(listener => listener(event));
     let savingsItem;
-    let savingsCommand;
+    let executionGateItem;
+    const commandHandlers = new Map();
     let usageChanged;
+    let gateStateChanged;
     let usageText = '';
+    let gateStateText = '';
     let picks;
     const disposable = { dispose() {} };
     const api = {
@@ -25,9 +29,22 @@ async function main() {
         workspace: {
             getConfiguration(section) {
                 assert.equal(section, 'inazumaPwsh');
-                return { get(key) { assert.equal(key, 'pwshPath'); return configuredPath; } };
+                return {
+                    get(key, fallback) {
+                        const values = {
+                            pwshPath: configuredPath,
+                            'executionGuard.enabled': true,
+                            'executionGuard.mode': 'manual',
+                            'executionGuard.repeatFailureThreshold': 3,
+                            'executionGuard.historySeconds': 120,
+                            'executionGuard.skipRedPhase': false
+                        };
+                        return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : fallback;
+                    },
+                    async update() {}
+                };
             },
-            onDidChangeConfiguration(listener) { configurationChanged = listener; return disposable; },
+            onDidChangeConfiguration(listener) { configurationListeners.push(listener); return disposable; },
             onDidChangeWorkspaceFolders() { return disposable; }
         },
         lm: { registerMcpServerDefinitionProvider(id, value) {
@@ -41,21 +58,29 @@ async function main() {
         Uri: { file: value => value },
         StatusBarAlignment: { Right: 2 },
         window: {
-            createStatusBarItem(id) { assert.equal(id, 'inazumaPwsh.savings'); return savingsItem = { show() {}, hide() {}, dispose() {} }; },
+            createStatusBarItem(id) {
+                const item = { show() {}, hide() {}, dispose() {} };
+                if (id === 'inazumaPwsh.savings') savingsItem = item;
+                else if (id === 'inazumaPwsh.executionGate') executionGateItem = item;
+                else assert.fail(`unexpected status item ${id}`);
+                return item;
+            },
             showQuickPick(items) { picks = items; },
             showInformationMessage() {}
         },
         commands: { registerCommand(id, handler) {
-            assert.equal(id, manifest.contributes.commands[0].command);
-            savingsCommand = handler;
+            commandHandlers.set(id, handler);
             return disposable;
         } }
     };
     const context = { extensionPath: __dirname, subscriptions: [] };
     const sandbox = { module: { exports: {} }, process, require: name => {
         if (name === 'vscode') return api;
-        if (name === 'node:fs') return { ...fs, watchFile: (file, options, listener) => { usageChanged = listener; }, unwatchFile() {} };
-        if (name === 'node:fs/promises') return { ...require(name), readFile: async () => usageText };
+        if (name === 'node:fs') return { ...fs, watchFile: (file, options, listener) => {
+            if (String(file).endsWith('execution-gate.json')) gateStateChanged = listener;
+            else usageChanged = listener;
+        }, unwatchFile() {} };
+        if (name === 'node:fs/promises') return { ...require(name), readFile: async file => String(file).endsWith('execution-gate.json') ? gateStateText : usageText };
         return require(name);
     } };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), sandbox);
@@ -65,20 +90,27 @@ async function main() {
     assert.equal(definition.label, 'Zuma');
     assert.equal(definition.version, manifest.version);
     assert.equal(definition.args.join(' '), `--parent-pid ${process.pid}`);
-    assert.equal(definition.env, undefined);
+    assert.equal(JSON.stringify(definition.env), JSON.stringify({
+        ZUMA_EXECUTION_GATE_ENABLED: 'true',
+        ZUMA_EXECUTION_GATE_MODE: 'manual',
+        ZUMA_EXECUTION_GATE_THRESHOLD: '3',
+        ZUMA_EXECUTION_GATE_HISTORY_SECONDS: '120',
+        ZUMA_EXECUTION_GATE_SKIP_RED_PHASE: 'false',
+        ZUMA_EXECUTION_GATE_GENERATION: '0'
+    }));
     assert.equal(definition.cwd, path.dirname(definition.command));
     assert.equal(await provider.resolveMcpServerDefinition(definition), definition);
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.9.0');
+    assert.equal(manifest.version, '0.10.0');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.9.0-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.10.0-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping
@@ -93,7 +125,7 @@ async function main() {
     assert.equal(resolveExecutable('/x', 'freebsd', 'x64'), undefined);
 
     // Env and configuration tests
-    assert.equal(provider.provideMcpServerDefinitions()[0].env, undefined);
+    assert.equal(provider.provideMcpServerDefinitions()[0].env.INAZUMA_PWSH_PATH, undefined);
     configuredPath = '  C:\\Program Files\\PowerShell\\7\\pwsh.exe  ';
     assert.equal(provider.provideMcpServerDefinitions()[0].env.INAZUMA_PWSH_PATH, 'C:\\Program Files\\PowerShell\\7\\pwsh.exe');
     configurationChanged({ affectsConfiguration: key => key === 'inazumaPwsh.pwshPath' });
@@ -105,7 +137,7 @@ async function main() {
     configurationChanged({ affectsConfiguration: key => key === 'inazumaPwsh.pwshPath' });
     assert.equal(changeCount, 2);
     configuredPath = '   ';
-    assert.equal(provider.provideMcpServerDefinitions()[0].env, undefined);
+    assert.equal(provider.provideMcpServerDefinitions()[0].env.INAZUMA_PWSH_PATH, undefined);
     configurationChanged({ affectsConfiguration: key => key === 'inazumaPwsh.pwshPath' });
     assert.equal(changeCount, 3);
 
@@ -137,11 +169,18 @@ async function main() {
     ].join('\n');
     await usageChanged();
     assert.equal(savingsItem.text, '$(zap) 90% saved | 2 calls');
-    await savingsCommand();
+    await commandHandlers.get('inazumaPwsh.showSavings')();
     assert.equal(picks.find(pick => pick.label === 'execute_powershell').description, 'Savings not measured');
     usageText += '\n{"tool":"search_files","countOnly":true}';
     await usageChanged();
     assert.equal(savingsItem.text, '$(zap) 90% saved | 3 calls');
+    gateStateText = JSON.stringify({ mode: 'incremental', tripped: [{ key: 'fixture' }] });
+    await gateStateChanged();
+    assert.equal(executionGateItem.text, '$(debug-breakpoint-log) Zuma: Breaker tripped');
+    assert.ok(commandHandlers.has('inazumaPwsh.selectExecutionGateMode'));
+    assert.ok(commandHandlers.has('inazumaPwsh.resetExecutionGate'));
+    await commandHandlers.get('inazumaPwsh.resetExecutionGate')();
+    assert.equal(provider.provideMcpServerDefinitions()[0].env.ZUMA_EXECUTION_GATE_GENERATION, '1');
     for (const subscription of context.subscriptions) subscription.dispose();
     console.log('EXTENSION_PROVIDER_TEST_PASSED');
 }

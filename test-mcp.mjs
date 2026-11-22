@@ -57,7 +57,7 @@ function request(method, params) {
 
 function result(message) {
     assert.equal(message.error, undefined, JSON.stringify(message.error));
-    assert.notEqual(message.result?.isError, true, JSON.stringify(message.result));
+    assert.notEqual(message.result?.isError, true, `${JSON.stringify(message.result)}\n${stderr}`);
     return JSON.parse(message.result.content.find(item => item.type === 'text').text);
 }
 
@@ -108,6 +108,49 @@ try {
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
     assert.ok(listed.result.tools.some(tool => tool.name === 'read_symbol'));
+    for (const name of ['get_execution_gate', 'set_execution_gate', 'reset_execution_gate'])
+        assert.ok(listed.result.tools.some(tool => tool.name === name), `missing ${name}`);
+    await tool('set_execution_gate', { mode: 'manual', enabled: false });
+    await check('execution gate blocks full suites and repeated failures', async () => {
+        const project = path.join(fixture, 'execution-gate');
+        const testPath = path.join(project, 'repeat.test.ts');
+        await mkdir(project, { recursive: true });
+        assert.equal(spawnSync('git', ['init', '-q', project]).status, 0);
+        await writeFile(testPath, "import { expect, test } from 'bun:test';\ntest('intentional gate failure', () => expect(1).toBe(2));\n");
+        const setIncremental = await tool('set_execution_gate', { mode: 'incremental', enabled: true, repeatFailureThreshold: 3, historySeconds: 120 });
+        assert.equal(setIncremental.mode, 'incremental');
+        const blockedSuite = await tool('run_bun_test', { workingDirectory: project });
+        assert.equal(blockedSuite.status, 'blocked');
+        assert.equal(blockedSuite.gate, 'incremental_test_scope');
+        await tool('set_execution_gate', { mode: 'manual', enabled: true, repeatFailureThreshold: 3, historySeconds: 120 });
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            const failed = await tool('run_bun_test', { workingDirectory: project, testArgs: ['repeat.test.ts'] });
+            assert.notEqual(failed.status, 'success', JSON.stringify(failed));
+            if (attempt < 3) assert.equal(failed.executionGate, undefined);
+            else {
+                assert.equal(failed.executionGate.details.threshold, 3);
+                assert.equal(failed.executionGate.details.consecutiveFailures, 3, JSON.stringify(failed));
+                assert.equal(failed.executionGate.tripped, true);
+            }
+        }
+        const blockedRepeat = await tool('run_bun_test', { workingDirectory: project, testArgs: ['repeat.test.ts'] });
+        assert.equal(blockedRepeat.status, 'blocked');
+        assert.equal(blockedRepeat.gate, 'circuit_breaker');
+        const crossEntryBlocked = await call('bun test repeat.test.ts', { workingDirectory: project });
+        assert.equal(crossEntryBlocked.status, 'blocked');
+        assert.equal(crossEntryBlocked.gate, 'circuit_breaker');
+        const state = await tool('get_execution_gate', {});
+        assert.equal(state.tripped.length, 1);
+        await writeFile(testPath, "import { expect, test } from 'bun:test';\ntest('intentional gate failure', () => expect(1).toBe(2));\n// changed approach\n");
+        const afterDiffChange = await tool('run_bun_test', { workingDirectory: project, testArgs: ['repeat.test.ts'] });
+        assert.notEqual(afterDiffChange.status, 'blocked');
+        await tool('reset_execution_gate', {});
+        assert.equal((await tool('get_execution_gate', {})).tripped.length, 0);
+        const afterReset = await tool('run_bun_test', { workingDirectory: project, testArgs: ['repeat.test.ts'] });
+        assert.notEqual(afterReset.status, 'blocked');
+        await tool('reset_execution_gate', {});
+        await tool('set_execution_gate', { mode: 'manual', enabled: false });
+    });
     await check('mcp tasks run long tools asynchronously and cancel them', async () => {
         assert.deepEqual(initialize.result.capabilities?.extensions?.['io.modelcontextprotocol/tasks'], {});
         const taskServer = spawn(executable, process.argv.slice(3), {
@@ -409,8 +452,8 @@ try {
             EventEmitter: class { constructor() { this.event = () => disposable; } fire() { changes++; } dispose() {} },
             workspace: {
                 workspaceFolders: [{ uri: { scheme: 'file', fsPath: fixture } }, { uri: { scheme: 'file', fsPath: root } }],
-                getConfiguration: () => ({ get: () => '' }),
-                onDidChangeConfiguration: callback => { changed = callback; return disposable; },
+                getConfiguration: () => ({ get: (key, fallback) => fallback ?? '' }),
+                onDidChangeConfiguration: callback => { changed ??= callback; return disposable; },
                 onDidChangeWorkspaceFolders: callback => { workspaceChanged = callback; return disposable; }
             },
             lm: { registerMcpServerDefinitionProvider: (_, value) => { provider = value; return disposable; } },
@@ -431,7 +474,10 @@ try {
         vscode.workspace.workspaceFolders = [];
         workspaceChanged();
         assert.equal(changes, 1);
-        assert.equal(provider.provideMcpServerDefinitions()[0].env, undefined);
+        const noWorkspaceEnvironment = provider.provideMcpServerDefinitions()[0].env;
+        assert.equal(noWorkspaceEnvironment.ZUMA_WORKSPACE_ROOT, undefined);
+        assert.equal(noWorkspaceEnvironment.ZUMA_EXECUTION_GATE_MODE, 'manual');
+        assert.equal(noWorkspaceEnvironment.ZUMA_EXECUTION_GATE_THRESHOLD, '3');
         changed({ affectsConfiguration: () => true });
         assert.equal(changes, 2);
         for (const subscription of context.subscriptions) subscription.dispose();
@@ -856,11 +902,13 @@ try {
         const source = path.join(project, 'Program.cs');
         await writeFile(source, 'MissingThing();');
         const first = await tool('run_dotnet_build', { workingDirectory: project, onlyNew: true });
+        assert.ok(first.summary, JSON.stringify(first));
         assert.deepEqual([first.summary.totalErrors, first.errors.length, first.newCount, first.fixedCount], [1, 1, undefined, undefined], JSON.stringify(first));
 
         await writeFile(source, '\n\nMissingThing();');
         await writeFile(path.join(project, 'Other.cs'), 'class Other { void Run() { MissingOther(); } }');
         const second = await tool('run_dotnet_build', { workingDirectory: project, onlyNew: true });
+        assert.ok(second.summary, JSON.stringify(second));
         assert.equal(second.summary.totalErrors, 2, JSON.stringify(second));
         assert.equal(second.newCount, 1, JSON.stringify(second));
         assert.equal(second.fixedCount, 0, JSON.stringify(second));
@@ -1098,6 +1146,7 @@ process.exitCode = 1;
         const huge = await tool('run_vitest', { workingDirectory: project, contextLines: 99 });
         assert.equal(huge.failures[0].codeContext.split('\n').length, 21);
         assert.ok(JSON.stringify(huge).length <= 8000);
+        await tool('reset_execution_gate', {});
         for (const lines of [0, -3]) assert.equal((await tool('run_vitest', { workingDirectory: project, contextLines: lines })).failures[0].codeContext, undefined);
         await rm(withContext.fullLogPath);
 

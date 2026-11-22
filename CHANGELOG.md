@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0
+
+- Add `Zuma Execution Gate` to stop identical failures from looping after the configured threshold when the command and Git diff are unchanged.
+- Add `manual`, `incremental`, and `milestone` execution modes. Incremental mode blocks unscoped full test runs and directs agents to `run_affected_tests` or a specific target; milestone mode permits full suites.
+- Apply the same gate to persistent PowerShell test commands and all typed build/test/diagnostic runners.
+- Add `get_execution_gate`, `set_execution_gate`, and `reset_execution_gate`, plus VS Code settings, status-bar mode selection, circuit state display, and reset commands.
+- Add optional Red-phase blocking for workspaces that explicitly set `skipRedPhase`; the default remains warning-compatible and non-blocking for existing users.
+
 ## 0.9.0
 
 - Run the Rust MCP front end on every packaged platform. UTF-8 code outlines, Git-aware file search, and log summaries execute locally in Rust; the self-contained C# server is retained as the compatibility core for PowerShell, diagnostics, non-UTF-8 file fallback, symbol reads, and the remaining tools.

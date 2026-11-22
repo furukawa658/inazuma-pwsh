@@ -88,10 +88,12 @@ internal static class CargoCheckParser
         return string.Join('\n', lines.Where(line =>
         {
             var text = line.Trim();
-            if (!text.StartsWith('{') || !text.EndsWith('}')) return true;
+            var jsonStart = text.IndexOf('{');
+            if (jsonStart < 0 || !text.EndsWith('}')) return true;
+            var json = text[jsonStart..];
             try
             {
-                using var document = JsonDocument.Parse(text);
+                using var document = JsonDocument.Parse(json);
                 return !Text(document.RootElement, "reason").Equals("compiler-message", StringComparison.Ordinal);
             }
             catch (JsonException) { return true; }
