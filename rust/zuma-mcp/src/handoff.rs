@@ -264,11 +264,7 @@ fn verification_history_path() -> PathBuf {
         })
 }
 
-pub fn record_verification(
-    tool: &str,
-    arguments: &Value,
-    response: &Result<Value, String>,
-) {
+pub fn record_verification(tool: &str, arguments: &Value, response: &Result<Value, String>) {
     if !matches!(
         tool,
         "run_dotnet_build"
