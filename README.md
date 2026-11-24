@@ -116,6 +116,12 @@ After installing the extension and approving its MCP tools, ask your agent to us
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
+## What's new in 0.12.0
+
+- **Task anchors.** Register the goal, target, acceptance criteria, out-of-scope items, and allowed paths once with `set_task_anchor`; later tool responses repeat the anchor so long chats retain the intended scope.
+- **Scope drift warnings.** File, trace, Python, and working-directory arguments outside `allowedPaths` add `scopeWarnings` to the reminder.
+- **Synchronous and asynchronous coverage.** Anchors are attached to normal tool responses and MCP task creation or polling results, with bounded local state that is never persisted to chat logs.
+
 ## What's new in 0.11.0
 
 - **Safe chat handoff.** `prepare_handoff` lists candidate VS Code chat sessions, requires explicit selection, replays the current JSONL delta format, and returns a bounded local summary with Git state, the latest Zuma verification, and the next action.

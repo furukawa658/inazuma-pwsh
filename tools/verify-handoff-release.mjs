@@ -20,12 +20,13 @@ if (mode === 'rust') {
   run(process.execPath, ['vscode-extension/test-extension.cjs']);
   const manifest = JSON.parse(readFileSync(path.join(root, 'vscode-extension/package.json'), 'utf8'));
   const cargo = readFileSync(path.join(root, 'rust/zuma-mcp/Cargo.toml'), 'utf8');
-  assert.equal(manifest.version, '0.11.0');
+  assert.equal(manifest.version, '0.12.0');
   assert.equal(manifest.displayName, 'Zuma MCP: Context & Log Optimizer for AI Coding');
   assert.equal(manifest.contributes.configuration.properties['inazumaPwsh.handoff.enabled'].default, false);
-  assert.match(cargo, /version\s*=\s*"0\.11\.0"/);
-  assert.match(readFileSync(path.join(root, 'README.md'), 'utf8'), /Available Tools \(23 Tools\)/);
+  assert.match(cargo, /version\s*=\s*"0\.12\.0"/);
+  assert.match(readFileSync(path.join(root, 'README.md'), 'utf8'), /Available Tools \(26 Tools\)/);
   assert.match(readFileSync(path.join(root, 'rust/zuma-mcp/src/main.rs'), 'utf8'), /prepare_handoff/);
+  assert.match(readFileSync(path.join(root, 'rust/zuma-mcp/src/main.rs'), 'utf8'), /set_task_anchor/);
   console.log('HANDOFF_RELEASE_CHECKS_OK');
 } else if (mode === 'package') {
   const target = process.platform === 'win32' ? 'win32-x64'

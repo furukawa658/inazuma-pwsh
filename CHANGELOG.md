@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 
 - Add `set_task_anchor`, `get_task_anchor`, and `clear_task_anchor` to keep the current goal, target, acceptance criteria, scope exclusions, and allowed paths visible during long chats.
 - Append the active task anchor to synchronous and asynchronous tool responses, and warn when a file, trace, Python executable, or working directory is outside `allowedPaths`.
