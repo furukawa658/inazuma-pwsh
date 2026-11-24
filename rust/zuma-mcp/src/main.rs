@@ -1,6 +1,9 @@
+#![recursion_limit = "256"]
+
 mod file_tools;
 mod handoff;
 mod sidecar;
+mod task_anchor;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -82,6 +85,7 @@ fn watch_parent(process_id: u32) {
 struct Bridge {
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     task_sidecar: Mutex<Option<Arc<Sidecar>>>,
+    task_anchors: task_anchor::TaskAnchorStore,
 }
 
 impl Bridge {
@@ -89,6 +93,7 @@ impl Bridge {
         Self {
             sidecar: Mutex::new(None),
             task_sidecar: Mutex::new(None),
+            task_anchors: task_anchor::TaskAnchorStore::new(),
         }
     }
 
@@ -481,6 +486,9 @@ fn read_section(arguments: &Value) -> Value {
 
 fn tool_definitions() -> Value {
     json!({ "tools": [
+        { "name": "set_task_anchor", "description": "Set the current chat target and scope. Call once at the start of a substantial task, and update it when the goal or scope changes. Zuma will append this anchor to later tool responses and warn when a path is outside allowedPaths.", "inputSchema": { "type": "object", "properties": { "goal": { "type": "string" }, "target": { "type": "string" }, "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }, "outOfScope": { "type": "array", "items": { "type": "string" } }, "allowedPaths": { "type": "array", "items": { "type": "string" } }, "sessionId": { "type": "string" } }, "required": ["goal", "target"] } },
+        { "name": "get_task_anchor", "description": "Return the current target, acceptance criteria, scope, and allowed paths.", "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "clear_task_anchor", "description": "Clear the current task anchor. Use this when the task is complete or a new unrelated chat starts.", "inputSchema": { "type": "object", "properties": {} } },
         { "name": "execute_powershell", "description": "Run PowerShell in a persistent session.", "inputSchema": { "type": "object", "properties": { "script": { "type": "string" }, "timeoutSeconds": { "type": "integer" }, "workingDirectory": { "type": "string" }, "maxOutputChars": { "type": "integer" }, "sessionId": { "type": "string" }, "compactResponse": { "type": "boolean" } }, "required": ["script"] } },
         { "name": "reset_powershell_session", "description": "Reset a persistent PowerShell session.", "inputSchema": { "type": "object", "properties": { "sessionId": { "type": "string" } } } },
         { "name": "list_powershell_sessions", "description": "List persistent PowerShell sessions.", "inputSchema": { "type": "object", "properties": {} } },
@@ -602,7 +610,12 @@ fn rust_regex_supported(arguments: &Value, name: &str, default: Option<&str>) ->
     regex::RegexBuilder::new(&expression).build().is_ok()
 }
 
-fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
+fn call_tool(
+    client_id: &Value,
+    params: &Value,
+    bridge: &Bridge,
+    task_anchor: Option<&Value>,
+) -> Value {
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
     let name = match params.get("name").and_then(Value::as_str) {
         Some(name) => name,
@@ -610,6 +623,16 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
             return json!({ "content": [{ "type": "text", "text": "{\"status\":\"error\",\"message\":\"Tool name is required.\"}" }], "isError": true });
         }
     };
+
+    if name == "set_task_anchor" {
+        return json!({ "content": [{ "type": "text", "text": bridge.task_anchors.set(arguments).to_string() }] });
+    }
+    if name == "get_task_anchor" {
+        return json!({ "content": [{ "type": "text", "text": bridge.task_anchors.get().to_string() }] });
+    }
+    if name == "clear_task_anchor" {
+        return json!({ "content": [{ "type": "text", "text": bridge.task_anchors.clear().to_string() }] });
+    }
 
     if name == "prepare_handoff" {
         let payload = handoff::prepare_handoff(arguments);
@@ -620,11 +643,16 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
             .map(Path::new)
             .unwrap_or_else(|| Path::new(""));
         record_usage(name, usage_path, &response);
-        return json!({ "content": [{ "type": "text", "text": response }] });
+        let mut result = json!({ "content": [{ "type": "text", "text": response }] });
+        task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
+        return result;
     }
 
     if uses_task_protocol(params) {
-        return forward_response(bridge.task_request_for(client_id, "tools/call", params.clone()));
+        let mut result =
+            forward_response(bridge.task_request_for(client_id, "tools/call", params.clone()));
+        task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
+        return result;
     }
 
     if can_handle_locally(name, arguments) {
@@ -639,15 +667,19 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
         if let Some(path) = arguments.get("path").and_then(Value::as_str) {
             record_usage(name, Path::new(path), &response);
         }
-        return json!({ "content": [{ "type": "text", "text": response }] });
+        let mut result = json!({ "content": [{ "type": "text", "text": response }] });
+        task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
+        return result;
     }
 
     let response = bridge.request_for(client_id, "tools/call", params.clone());
     handoff::record_verification(name, arguments, &response);
-    forward_response(response)
+    let mut result = forward_response(response);
+    task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
+    result
 }
 
-fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
+fn handle_request(request: Request, bridge: &Bridge, task_anchor: Option<&Value>) -> Option<Value> {
     let Some(id) = request.id else {
         if request.method == "notifications/cancelled" {
             let _ = bridge.cancel(&request.params);
@@ -661,10 +693,14 @@ fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
         request.method.as_str(),
         "tasks/get" | "tasks/update" | "tasks/cancel"
     ) {
-        return Some(forward_protocol_response(
+        let mut response = forward_protocol_response(
             &id,
             bridge.task_request_for(&id, &request.method, request.params),
-        ));
+        );
+        if let Some(result) = response.get_mut("result") {
+            task_anchor::TaskAnchorStore::decorate_snapshot(result, task_anchor);
+        }
+        return Some(response);
     }
 
     let result = match request.method.as_str() {
@@ -674,11 +710,12 @@ fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
                 "tools": { "listChanged": false },
                 "extensions": { "io.modelcontextprotocol/tasks": {} }
             },
-            "serverInfo": { "name": "Zuma", "version": VERSION }
+            "serverInfo": { "name": "Zuma", "version": VERSION },
+            "instructions": "At the start of a substantial task, call set_task_anchor with the goal, target, acceptance criteria, out-of-scope items, and absolute allowed paths. Keep it updated when scope changes and clear it only when the task is complete."
         }),
         "ping" => json!({}),
         "tools/list" => tool_definitions(),
-        "tools/call" => call_tool(&id, &request.params, bridge),
+        "tools/call" => call_tool(&id, &request.params, bridge, task_anchor),
         _ => {
             return Some(json!({
                 "jsonrpc": "2.0",
@@ -717,11 +754,44 @@ fn run() -> io::Result<()> {
                 continue;
             }
         };
+        let is_anchor_call = request.method == "tools/call"
+            && request
+                .params
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| {
+                    matches!(
+                        name,
+                        "set_task_anchor" | "get_task_anchor" | "clear_task_anchor"
+                    )
+                });
+        if is_anchor_call {
+            if let Some(response) = handle_request(request, &bridge, None) {
+                let mut output = stdout.lock().unwrap();
+                writeln!(output, "{response}")?;
+                output.flush()?;
+            }
+            continue;
+        }
 
+        let anchor_tool = if request.method == "tools/call" {
+            request.params.get("name").and_then(Value::as_str)
+        } else if request.method.starts_with("tasks/") {
+            Some(request.method.as_str())
+        } else {
+            None
+        };
+        let anchor_arguments = if request.method == "tools/call" {
+            request.params.get("arguments").unwrap_or(&Value::Null)
+        } else {
+            &request.params
+        };
+        let task_anchor =
+            anchor_tool.and_then(|name| bridge.task_anchors.snapshot(name, anchor_arguments));
         let worker_output = Arc::clone(&stdout);
         let worker_bridge = Arc::clone(&bridge);
         workers.push(std::thread::spawn(move || {
-            if let Some(response) = handle_request(request, &worker_bridge) {
+            if let Some(response) = handle_request(request, &worker_bridge, task_anchor.as_ref()) {
                 let mut output = worker_output.lock().unwrap();
                 let _ = writeln!(output, "{}", response);
                 let _ = output.flush();

@@ -1,5 +1,13 @@
 # Zuma MCP reference
 
+## Task anchor
+
+At the start of a substantial task, call `set_task_anchor` with `goal`, `target`, optional `acceptanceCriteria`, `outOfScope`, `allowedPaths`, and `sessionId`. The list fields accept at most 32 strings of up to 2,000 characters each, and the complete serialized reminder is capped at 6,000 UTF-8 bytes. Every `allowedPaths` entry must be absolute. The server initialization response also tells clients to establish an anchor and update it when scope changes.
+
+The active anchor is attached to subsequent tool responses. Calls that expose `path`, `tracePath`, `workingDirectory`, or `pythonPath` are checked against `allowedPaths`; an outside path adds `scopeWarnings` to `taskAnchor`. This is a scope reminder, not an authorization boundary. PowerShell scripts are not parsed for embedded paths.
+
+Anchor state is process-local memory. It is not written to disk, uploaded, or copied into chat-handoff logs. `get_task_anchor` returns the active state and `clear_task_anchor` removes it. Only one anchor is active in a Zuma server process, identified by its supplied `sessionId`; clients sharing one process must update or clear the anchor deliberately when switching tasks.
+
 ## Sessions and output
 
 Choose a unique `sessionId` for each chat and reuse it within that chat. IDs contain 1 to 64 letters, digits, hyphens, or underscores. If omitted, calls share the `default` session. Calls with the same ID run sequentially; different IDs can run concurrently.

@@ -70,13 +70,25 @@ fn array_tool_parameters_define_items() {
         initialize_response["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"],
         serde_json::json!({})
     );
+    assert!(
+        initialize_response["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("set_task_anchor")
+    );
     let list_response = responses
         .iter()
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 23);
+    assert_eq!(tools.len(), 26);
     assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
+    for name in ["set_task_anchor", "get_task_anchor", "clear_task_anchor"] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "missing {name}"
+        );
+    }
     assert!(
         tools
             .iter()
@@ -185,6 +197,47 @@ fn tool_payload(responses: &[Value], id: u64) -> Value {
     assert_eq!(response["error"], Value::Null, "{response}");
     assert_ne!(response["result"]["isError"], true, "{response}");
     serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn reminds_each_tool_about_the_active_task_anchor() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("zuma-anchor-{unique}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("sample.md");
+    let outside = root.join("../outside.md");
+    std::fs::write(&source, "# Target\n").unwrap();
+    std::fs::write(&outside, "# Outside\n").unwrap();
+
+    let responses = call(&[
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "set_task_anchor", "arguments": { "goal": "Finish the anchor feature", "target": "Zuma task reminders", "acceptanceCriteria": ["Responses contain the target"], "outOfScope": ["UI redesign"], "allowedPaths": [root.to_string_lossy()], "sessionId": "anchor-test" } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "peek_file", "arguments": { "path": outside.to_string_lossy() } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "get_task_anchor", "arguments": {} } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "clear_task_anchor", "arguments": {} } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": { "name": "peek_file", "arguments": { "path": source.to_string_lossy() } } }),
+    ]);
+
+    let set = tool_payload(&responses, 2);
+    assert_eq!(set["taskAnchor"]["target"], "Zuma task reminders");
+    let reminder = tool_payload(&responses, 3);
+    assert_eq!(reminder["taskAnchor"]["goal"], "Finish the anchor feature");
+    assert_eq!(
+        reminder["taskAnchor"]["scopeWarnings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(tool_payload(&responses, 4)["status"], "active");
+    assert_eq!(tool_payload(&responses, 5)["status"], "cleared");
+    assert!(tool_payload(&responses, 6).get("taskAnchor").is_none());
+
+    std::fs::remove_file(outside).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
