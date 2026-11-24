@@ -143,11 +143,13 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 19);
+  assert.equal(tools.result.tools.length, 22);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'read_symbol'));
+  for (const name of ['get_execution_gate', 'set_execution_gate', 'reset_execution_gate'])
+    assert.ok(tools.result.tools.some(tool => tool.name === name), `missing ${name}`);
   assert.deepEqual(initialized.result.capabilities.extensions['io.modelcontextprotocol/tasks'], {});
   await verifyTasks();
 
@@ -244,7 +246,7 @@ try {
   }, 200000);
   await rm(buildProject, { recursive: true, force: true });
   assert.equal(build.status, 'success', JSON.stringify(build));
-  console.log('REAL_SMOKE_OK tools=19 parallel=true cancellation=true dotnet_build=success');
+  console.log('REAL_SMOKE_OK tools=22 parallel=true cancellation=true dotnet_build=success');
 } finally {
   child.stdin.end();
   child.kill();

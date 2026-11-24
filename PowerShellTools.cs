@@ -10,10 +10,12 @@ namespace InazumaPwsh;
 public sealed class PowerShellTools
 {
     private readonly ConcurrentPowerShellManager _session;
+    private readonly ExecutionGate _executionGate;
 
-    public PowerShellTools(ConcurrentPowerShellManager session)
+    public PowerShellTools(ConcurrentPowerShellManager session, ExecutionGate executionGate)
     {
         _session = session;
+        _executionGate = executionGate;
     }
 
     [McpServerTool(Name = "execute_powershell")]
@@ -33,8 +35,23 @@ public sealed class PowerShellTools
         bool compactResponse = true,
         CancellationToken cancellationToken = default)
     {
-        return await UsageLog.TrackCallAsync("execute_powershell", _session.ExecuteAsync(script, workingDirectory, Math.Clamp(timeoutSeconds, 1, 300),
-            Math.Clamp(maxOutputChars, 1000, 50000), sessionId, compactResponse, cancellationToken));
+        var effectiveDirectory = workingDirectory ?? Environment.GetEnvironmentVariable("ZUMA_WORKSPACE_ROOT") ?? Directory.GetCurrentDirectory();
+        var isTestRun = ExecutionGate.IsTestCommand(script);
+        var preflight = await _executionGate.EvaluateAsync("execute_powershell", effectiveDirectory, script,
+            isTestRun, ExecutionGate.HasSpecificTestTarget(script), cancellationToken: cancellationToken);
+        if (!preflight.Allowed)
+        {
+            UsageLog.RecordCall("execute_powershell");
+            return JsonDefaults.Serialize(new { status = "blocked", gate = preflight.Reason, message = preflight.Message, details = preflight.Details });
+        }
+
+        var report = await _session.ExecuteAsync(script, workingDirectory, Math.Clamp(timeoutSeconds, 1, 300),
+            Math.Clamp(maxOutputChars, 1000, 50000), sessionId, compactResponse, cancellationToken);
+        if (!isTestRun) return await UsageLog.TrackCallAsync("execute_powershell", Task.FromResult(report));
+        var postflight = await _executionGate.EvaluateAsync("execute_powershell", effectiveDirectory, script,
+            true, ExecutionGate.HasSpecificTestTarget(script), report, cancellationToken);
+        UsageLog.RecordCall("execute_powershell");
+        return ExecutionGate.ApplyMetadata(report, postflight);
     }
 
     [McpServerTool(Name = "reset_powershell_session")]

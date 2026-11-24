@@ -7,7 +7,7 @@ using ModelContextProtocol.Server;
 namespace InazumaPwsh;
 
 [McpServerToolType]
-public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
+public sealed class DiagnosticTools(IHostApplicationLifetime lifetime, ExecutionGate executionGate)
 {
     private const string ContextLinesText = "Number of source lines (0 to 10) shown before and after each failure location as codeContext. 0 omits it. A line already shown for an earlier item of the same file is not repeated.";
     private const string CompactResponseText = "When true (default), omit output lines already represented in structured fields. Set false to retain raw output.";
@@ -44,7 +44,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var parsed = await DotnetBuildParser.ParseAsync(directory, workingDirectory, execution.ExitCode, includeWarnings, token, execution.FullLogPath, onlyNew ? previous : null);
             if (execution.Status == "completed" && parsed.Baseline != null) UpdateBaseline(DotnetBuildBaselines, baselineKey, parsed.Baseline);
             return await CombineAsync("run_dotnet_build", parsed.Report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, commandKey: "dotnet build " + target);
 
     [McpServerTool(Name = "run_dotnet_test")]
     [Description("Run dotnet test and return failures and counts from its TRX reports. Uses VSTest options, or Microsoft.Testing.Platform options when global.json selects that runner (the test project then needs the TRX report extension). Dependencies are not installed automatically.")]
@@ -66,7 +66,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             if (testingPlatform) { var parsed = JsonNode.Parse(report)!.AsObject(); parsed.Remove("rerunArgs"); report = parsed.ToJsonString(JsonDefaults.Options); }
             report = ApplyTestRegression("run_dotnet_test", workingDirectory + "\n" + string.Join("\n", testArgs ?? []) , report, execution, regressionsOnly);
             return await CombineAsync("run_dotnet_test", report, execution, workingDirectory, contextLines, testingPlatform ? null : DotnetFilter, compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, testRun: true,
+            hasSpecificTarget: ExecutionGate.HasSpecificTestArguments("run_dotnet_test", testArgs),
+            commandKey: "dotnet test " + string.Join(' ', testArgs ?? []));
 
     [McpServerTool(Name = "run_playwright")]
     [Description("Run a locally installed Playwright and return failures, counts and paths to traces and other attachments from its JSON report. Dependencies are not installed automatically. Environment variables are set only in the child process.")]
@@ -89,7 +91,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var report = await PlaywrightResultParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, cancellationToken: token);
             report = ApplyTestRegression("run_playwright", workingDirectory + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_playwright", report, execution, workingDirectory, contextLines, result => HasFailures(result) ? ["--last-failed"] : null, compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, testRun: true,
+            hasSpecificTarget: ExecutionGate.HasSpecificTestArguments("run_playwright", testArgs),
+            commandKey: "playwright test " + string.Join(' ', testArgs ?? []));
 
     [McpServerTool(Name = "run_bun_test")]
     [Description("Run bun test and return failures and counts from its JUnit XML report. The full log is saved to fullLogPath. Dependencies are not installed automatically.")]
@@ -120,7 +124,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             }
             report = ApplyTestRegression("run_bun_test", workingDirectory + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_bun_test", report, execution, workingDirectory, contextLines, FailedFiles, compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, testRun: true,
+            hasSpecificTarget: ExecutionGate.HasSpecificTestArguments("run_bun_test", testArgs),
+            commandKey: "bun test " + string.Join(' ', testArgs ?? []));
 
     [McpServerTool(Name = "run_pytest")]
     [Description("Run pytest and return failures and counts from its JUnit XML report. The interpreter is pythonPath, otherwise the nearest .venv found from workingDirectory upwards, otherwise python on PATH. Dependencies are not installed automatically.")]
@@ -142,7 +148,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var report = await TestReportParser.ParseJUnitAsync(reportPath, workingDirectory, execution.ExitCode, noTestsExitCode: 5, cancellationToken: token);
             report = ApplyTestRegression("run_pytest", workingDirectory + "\n" + (pythonPath ?? "") + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_pytest", report, execution, workingDirectory, contextLines, result => HasFailures(result) ? ["--lf"] : null, compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, testRun: true,
+            hasSpecificTarget: ExecutionGate.HasSpecificTestArguments("run_pytest", testArgs),
+            commandKey: "pytest " + string.Join(' ', testArgs ?? []));
 
     [McpServerTool(Name = "run_vitest")]
     [Description("Run a locally installed Vitest once and return failures and counts from its JSON report. Dependencies are not installed automatically. Environment variables are set only in the child process.")]
@@ -164,7 +172,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var report = await TestReportParser.ParseVitestAsync(reportPath, workingDirectory, execution.ExitCode, token);
             report = ApplyTestRegression("run_vitest", workingDirectory + "\n" + string.Join("\n", testArgs ?? []), report, execution, regressionsOnly);
             return await CombineAsync("run_vitest", report, execution, workingDirectory, contextLines, FailedFiles, compactResponse: compactResponse, includeSuccessOutput: true);
-        }, cancellationToken);
+        }, cancellationToken, testRun: true,
+            hasSpecificTarget: ExecutionGate.HasSpecificTestArguments("run_vitest", testArgs),
+            commandKey: "vitest run " + string.Join(' ', testArgs ?? []));
 
     [McpServerTool(Name = "run_tsc")]
     [Description("Run a locally installed TypeScript compiler with --noEmit and return error counts, error-code counts and the first 15 diagnostics. output leaves out the compiler lines that diagnostics already lists in full. Passing --build or -b in tscArgs builds project references and omits --noEmit. tscPath overrides the compiler found in node_modules/typescript. Dependencies are not installed automatically.")]
@@ -199,7 +209,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             if (execution.Status == "completed" && current != null) UpdateBaseline(TscBaselines, baselineKey, current);
             return await CombineAsync("run_tsc", report, execution, workingDirectory, contextLines,
                 trimOutput: (output, result) => TscReportParser.WithoutListed(output, result, workingDirectory, onlyNew ? previous : null, compactResponse), compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, commandKey: "tsc " + string.Join(' ', tscArgs ?? []));
 
     [McpServerTool(Name = "run_cargo_check")]
     [Description("Run cargo check and return structured Rust compiler diagnostics with counts, file, line, column, code, severity, and message. Dependencies are not installed automatically.")]
@@ -230,7 +240,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
                 if (execution.StdoutLogPath != null)
                     try { File.Delete(execution.StdoutLogPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             }
-        }, cancellationToken);
+        }, cancellationToken, commandKey: "cargo check " + string.Join(' ', cargoArgs ?? []));
 
     [McpServerTool(Name = "run_eslint")]
     [Description("Run a locally installed ESLint and return error and warning counts, per-rule counts and the first 15 problems (errors first) from its JSON report. Dependencies are not installed automatically.")]
@@ -254,7 +264,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
             var parsed = await EslintReportParser.ParseAsync(reportPath, workingDirectory, execution.ExitCode, token, onlyNew ? previous : null);
             if (execution.Status == "completed" && parsed.Baseline != null) UpdateBaseline(EslintBaselines, baselineKey, parsed.Baseline);
             return await CombineAsync("run_eslint", parsed.Report, execution, workingDirectory, contextLines, compactResponse: compactResponse);
-        }, cancellationToken);
+        }, cancellationToken, commandKey: "eslint " + string.Join(' ', eslintArgs ?? []));
 
     [McpServerTool(Name = "run_affected_tests")]
     [Description("Select test files related to Git changes by direct changes, naming conventions, and relative imports, then run each detected test runner once. Untracked files are included. Only installed project dependencies are used.")]
@@ -347,17 +357,33 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime)
         UsageLog.TrackCallAsync("inspect_playwright_trace", PlaywrightTraceParser.ParseAsync(tracePath, Math.Clamp(maxOutputChars, 1000, 50000), cancellationToken, workingDirectory));
 
     private async Task<string> RunAsync(string tool, string workingDirectory, int timeoutSeconds,
-        Func<string, CancellationToken, Task<string>> action, CancellationToken cancellationToken)
+        Func<string, CancellationToken, Task<string>> action, CancellationToken cancellationToken,
+        bool testRun = false, bool hasSpecificTarget = true, string? commandKey = null)
     {
         if (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory))
         {
             UsageLog.RecordCall(tool);
             return JsonDefaults.Serialize(new { status = "error", message = "workingDirectory must be an existing absolute directory." });
         }
+        var normalizedCommand = commandKey ?? tool;
+        var preflight = await executionGate.EvaluateAsync(tool, workingDirectory, normalizedCommand, testRun, hasSpecificTarget,
+            cancellationToken: cancellationToken);
+        if (!preflight.Allowed)
+        {
+            UsageLog.RecordCall(tool);
+            return JsonDefaults.Serialize(new { status = "blocked", gate = preflight.Reason, message = preflight.Message, details = preflight.Details });
+        }
+
         var directory = Path.Combine(Path.GetTempPath(), $"inazuma-diagnostics-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.ApplicationStopping);
-        try { return await action(directory, linked.Token); }
+        try
+        {
+            var report = await action(directory, linked.Token);
+            var postflight = await executionGate.EvaluateAsync(tool, workingDirectory, normalizedCommand, testRun, hasSpecificTarget,
+                report, linked.Token);
+            return ExecutionGate.ApplyMetadata(report, postflight);
+        }
         catch (OperationCanceledException) { UsageLog.RecordCall(tool); return JsonDefaults.Serialize(new { status = "cancelled" }); }
         catch (Exception exception) when (exception is IOException or ArgumentException or System.ComponentModel.Win32Exception)
         {

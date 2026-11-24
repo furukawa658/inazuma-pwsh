@@ -33,6 +33,7 @@ builder.Logging.AddConsole(options =>
 
 // 常駐型PowerShellセッションをシングルトン登録
 builder.Services.AddSingleton<ConcurrentPowerShellManager>();
+builder.Services.AddSingleton<ExecutionGate>();
 
 var taskStore = new InMemoryMcpTaskStore
 {
@@ -60,6 +61,7 @@ builder.Services.AddMcpServer()
     .WithTools<PowerShellTools>()
     .WithTools<DiagnosticTools>()
     .WithTools<FileReadingTools>()
+    .WithTools<ExecutionGateTools>()
     .WithTasks(taskStore, options =>
     {
         options.ExecutionModeSelector = request =>
