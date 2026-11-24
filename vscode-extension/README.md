@@ -1,4 +1,4 @@
-# Zuma MCP
+# Zuma MCP: Context & Log Optimizer for AI Coding
 
 **Your coding agent reads 7% of a design document and 1% of a build log—not 100%.**
 
@@ -12,7 +12,7 @@
 
 These are single-file measurements. Savings across complete chats have not been measured.
 
-Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust file/search engine, structured build and test diagnostics, and persistent local PowerShell 7 sessions. Instead of loading entire files and terminal dumps into chat, inspect an outline, read an exact symbol or section, summarize a log, run only affected tests, and drill down to a full report only when needed.
+Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust file/search engine, structured build and test diagnostics, persistent local PowerShell 7 sessions, and a compact chat handoff. Instead of loading entire files and terminal dumps into chat, inspect an outline, read an exact symbol or section, summarize a log, run only affected tests, or hand the next chat only the goal, changed files, latest verification, and next action.
 
 ## Why Developers Use Zuma MCP
 
@@ -24,7 +24,7 @@ Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust fi
 - **Non-blocking long work:** Task-aware MCP clients can poll and cancel PowerShell, build, test, lint, and type-check operations while existing clients keep synchronous calls.
 - **Automatic VS Code integration:** The extension registers its MCP server and bundles the Rust front end, C# compatibility core, and PowerShell worker. No manual `mcp.json` setup is required.
 
-## Available Tools (22 Tools)
+## Available Tools (23 Tools)
 
 ### Execution Gate
 
@@ -70,6 +70,14 @@ The circuit breaker is shared by typed diagnostic tools and test commands run th
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
 
+### Chat handoff
+
+| Tool | Purpose |
+| --- | --- |
+| `prepare_handoff` | Replays an explicitly selected VS Code chat session and returns a bounded local summary with Git state, the latest Zuma verification, and the next action. |
+
+Handoff access is disabled by default. Enable `inazumaPwsh.handoff.enabled` in a trusted workspace, then call `prepare_handoff` without a session to list candidates. Select one `sessionId` or `sessionPath` for a second call and pass `nextActionHint`. Zuma does not read an unsent editor draft as the next action, never silently chooses the newest chat, and never saves the handoff unless a client explicitly keeps the returned text.
+
 ### Native Rust + C# Architecture
 
 Every packaged platform starts the Rust MCP front end for UTF-8 Markdown and code outlines, explicit line ranges, Git-aware search, and log summaries. It forwards PowerShell sessions, AST parsing, symbol reads, non-UTF-8 fallback, and build/test diagnostics to the self-contained C# compatibility core when required.
@@ -92,8 +100,15 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "Peek at this design document with Zuma MCP, then read only the section about approvals."
 - "Read the `RunAsync` symbol in this C# file, then fix the cancellation path."
 - "Summarize the errors in this build log with Zuma MCP before opening it."
+- "List safe chat-handoff candidates, let me choose one, then prepare the next chat context."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
+
+## What's new in 0.11.0
+
+- **Safe chat handoff.** `prepare_handoff` lists candidate VS Code chat sessions, requires explicit selection, replays the current JSONL delta format, and returns a bounded local summary with Git state, the latest Zuma verification, and the next action.
+- **Opt-in privacy controls.** Handoff is disabled by default. It redacts credential-like values and URL query strings, rejects unsupported or oversized logs, and records byte savings without uploading or persisting chat text.
+- **Marketplace clarity.** The listing title now says what Zuma does: `Zuma MCP: Context & Log Optimizer for AI Coding`.
 
 ## What's new in 0.10.0
 
@@ -157,7 +172,7 @@ The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it,
 - **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.
 - **`run_tsc` additions.** `onlyNew: true` lists only diagnostics that the previous run with the same `workingDirectory` and `tscArgs` did not have, with `newCount` and `fixedCount`; the previous result is kept in memory until the server stops. `--build` and `-b` are accepted and omit `--noEmit`.
 
-Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.10.0/CHANGELOG.md).
+Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.11.0/CHANGELOG.md).
 
 ## Requirements and installation
 
@@ -183,7 +198,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 
 - Zuma MCP was formerly InazumaPwsh; the extension ID (`ShunsukeF.inazuma-pwsh`), setting keys (`inazumaPwsh.*`), environment variables, executable names, and the log folder keep their inazuma names for compatibility.
 - Linux and macOS are experimental. On Linux/macOS there is no Job Object, so workers may be orphaned if the server process crashes.
-- Details on sessions, output limits, cancellation, execution gates, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.10.0/docs/reference.md).
+- Details on sessions, output limits, cancellation, execution gates, and building from source are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.11.0/docs/reference.md).
 
 ### Sessions and output
 
@@ -192,7 +207,7 @@ The Zuma MCP project code is licensed under the MIT License, copyright 2026 Shun
 - There are at most six sessions, including `default`. Idle sessions expire after 10 minutes.
 - `maxOutputChars` limits `output` to 1,000 through 50,000 characters, with a default of 6,000. When output is truncated, the full log is saved locally.
 
-Timeouts, `compactResponse`, Python standard input, MCP Tasks, execution gates, and the limits of each diagnostic tool are described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.10.0/docs/reference.md).
+Timeouts, `compactResponse`, Python standard input, MCP Tasks, execution gates, and the limits of each diagnostic tool are described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.11.0/docs/reference.md).
 
 ### Safety and logs
 
@@ -200,8 +215,8 @@ Scripts run with the current user's permissions. Zuma MCP is not a security sand
 
 Full logs are saved as UTF-8 under `%TEMP%/inazuma-pwsh-logs/`. `fullLogPath` identifies an execution log; `fullReportPath`, when present, identifies detailed structured diagnostics. Logs older than 3 days, or beyond 200 MB in total, are deleted at server startup, and they may contain sensitive output. Review and remove them when no longer needed.
 
-Cancellation and timeout behavior is described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.10.0/docs/reference.md).
+Cancellation and timeout behavior is described in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.11.0/docs/reference.md).
 
 ### Build and verification
 
-Build commands, reproducibility notes, and the limits of the test suite are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.10.0/docs/reference.md).
+Build commands, reproducibility notes, and the limits of the test suite are in [docs/reference.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.11.0/docs/reference.md).

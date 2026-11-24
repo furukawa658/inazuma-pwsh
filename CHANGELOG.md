@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- Add `prepare_handoff` to discover VS Code chat-session candidates without silently selecting one, replay the current JSONL delta format, and return a bounded handoff context in Rust.
+- Combine explicit session context with compact Git status and the latest Zuma verification result. Preserve the goal, unresolved verification, and next action when output is trimmed.
+- Redact credential-like values and URL query strings, cap chat input at 50 MB, disable handoff by default, and record only byte savings in `usage.jsonl`.
+- Rename the Marketplace display title to `Zuma MCP: Context & Log Optimizer for AI Coding` and update the listing description to state the user outcome directly.
+
 ## 0.10.0
 
 - Add `Zuma Execution Gate` to stop identical failures from looping after the configured threshold when the command and Git diff are unchanged.

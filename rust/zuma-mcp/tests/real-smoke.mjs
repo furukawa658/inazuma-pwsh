@@ -17,7 +17,7 @@ const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostR
 const child = spawn(executable, [], {
   cwd: root,
   stdio: ['pipe', 'pipe', 'pipe'],
-  env: { ...process.env, ZUMA_WORKSPACE_ROOT: root }
+  env: { ...process.env, ZUMA_WORKSPACE_ROOT: root, ZUMA_HANDOFF_ENABLED: 'true' }
 });
 const pending = new Map();
 let nextId = 1;
@@ -143,8 +143,9 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 22);
+  assert.equal(tools.result.tools.length, 23);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
+  assert.ok(tools.result.tools.some(tool => tool.name === 'prepare_handoff'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'read_symbol'));
@@ -244,9 +245,30 @@ try {
     includeWarnings: false,
     timeoutSeconds: 180
   }, 200000);
-  await rm(buildProject, { recursive: true, force: true });
   assert.equal(build.status, 'success', JSON.stringify(build));
-  console.log('REAL_SMOKE_OK tools=22 parallel=true cancellation=true dotnet_build=success');
+  const sessionPath = path.join(buildProject, 'synthetic-chat.jsonl');
+  await writeFile(sessionPath, JSON.stringify({
+    kind: 0,
+    v: {
+      version: 3,
+      customTitle: 'Packaged smoke handoff',
+      initialLocation: buildProject,
+      requests: [{ message: { text: 'Verify the packaged Zuma handoff' }, response: [] }],
+      inputState: { inputText: 'Continue with release verification' }
+    }
+  }));
+  const handoff = await callTool('prepare_handoff', {
+    sessionPath,
+    workingDirectory: buildProject,
+    nextActionHint: 'Continue with release verification',
+    maxChars: 6000
+  });
+  assert.equal(handoff.status, 'success', JSON.stringify(handoff));
+  assert.match(handoff.handoffText, /Verify the packaged Zuma handoff/);
+  assert.match(handoff.handoffText, /run_dotnet_build: success/);
+  assert.match(handoff.handoffText, /Continue with release verification/);
+  await rm(buildProject, { recursive: true, force: true });
+  console.log('REAL_SMOKE_OK tools=23 parallel=true cancellation=true dotnet_build=success handoff=success');
 } finally {
   child.stdin.end();
   child.kill();

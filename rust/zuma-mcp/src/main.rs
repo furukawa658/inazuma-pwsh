@@ -1,4 +1,5 @@
 mod file_tools;
+mod handoff;
 mod sidecar;
 
 use serde::Deserialize;
@@ -501,7 +502,8 @@ fn tool_definitions() -> Value {
         { "name": "read_section", "description": "Read only part of a text file.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "query": { "type": "string" }, "startLine": { "type": "integer" }, "endLine": { "type": "integer" }, "maxChars": { "type": "integer" }, "ranges": { "type": "array", "items": { "oneOf": [ { "type": "string" }, { "type": "object", "properties": { "query": { "type": "string" }, "startLine": { "type": "integer" }, "endLine": { "type": "integer" } } } ] } } }, "required": ["path"] } },
         { "name": "read_symbol", "description": "Read one named declaration from a code file.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "symbol": { "type": "string" }, "occurrence": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["path", "symbol"] } },
         { "name": "summarize_log", "description": "Summarize matching lines from a large log.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "pattern": { "type": "string" }, "contextLines": { "type": "integer" }, "tailLines": { "type": "integer" }, "maxGroups": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["path"] } },
-        { "name": "search_files", "description": "Search files under a directory and return compact matches.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "pattern": { "type": "string" }, "fileName": { "type": "string" }, "caseSensitive": { "type": "boolean" }, "maxResults": { "type": "integer" }, "maxPerFile": { "type": "integer" }, "literal": { "type": "boolean" }, "contextLines": { "type": "integer" }, "exclude": { "type": "array", "items": { "type": "string" } } }, "required": ["path", "pattern"] } }
+        { "name": "search_files", "description": "Search files under a directory and return compact matches.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "pattern": { "type": "string" }, "fileName": { "type": "string" }, "caseSensitive": { "type": "boolean" }, "maxResults": { "type": "integer" }, "maxPerFile": { "type": "integer" }, "literal": { "type": "boolean" }, "contextLines": { "type": "integer" }, "exclude": { "type": "array", "items": { "type": "string" } } }, "required": ["path", "pattern"] } },
+        { "name": "prepare_handoff", "description": "Prepare a bounded AI handoff from an explicitly selected VS Code chat session.", "inputSchema": { "type": "object", "properties": { "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } } } }
     ] })
 }
 
@@ -609,6 +611,18 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
         }
     };
 
+    if name == "prepare_handoff" {
+        let payload = handoff::prepare_handoff(arguments);
+        let response = payload.to_string();
+        let usage_path = arguments
+            .get("sessionPath")
+            .and_then(Value::as_str)
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new(""));
+        record_usage(name, usage_path, &response);
+        return json!({ "content": [{ "type": "text", "text": response }] });
+    }
+
     if uses_task_protocol(params) {
         return forward_response(bridge.task_request_for(client_id, "tools/call", params.clone()));
     }
@@ -641,12 +655,6 @@ fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {
         return None;
     };
 
-    if request.method == "tools/list" && uses_task_protocol(&request.params) {
-        return Some(forward_protocol_response(
-            &id,
-            bridge.task_request_for(&id, &request.method, request.params),
-        ));
-    }
     if matches!(
         request.method.as_str(),
         "tasks/get" | "tasks/update" | "tasks/cancel"
