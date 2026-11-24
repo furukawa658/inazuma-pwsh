@@ -38,6 +38,14 @@ Task records are kept in memory for one hour and are lost when the server proces
 
 On Windows, the Rust front end uses a separate compatibility server process for task-capable 2026 requests. This keeps those requests independent from the existing 2024 initialized sidecar and its persistent sessions.
 
+## Chat handoff
+
+`prepare_handoff` is available in the Rust front end and disabled unless `inazumaPwsh.handoff.enabled` is true. A call without `sessionId` or `sessionPath` returns up to 50 candidates and `selectionRequired: true`; the server never silently chooses the newest chat. A selected file must be an absolute `.jsonl` path of at most 50 MB.
+
+The parser accepts the current VS Code `kind: 0` initial state, `kind: 1` replacement events, and `kind: 2` array-append events. Unsupported shapes and malformed lines fail with a line-numbered error. The response contains only a bounded goal, recent user instructions, compact Git status, the latest verification summary, and the explicitly supplied `nextActionHint`. It does not read an unsent `inputState.inputText` as the next action. Credential-like values and URL queries are redacted before formatting. Handoff text defaults to 6,000 characters and is not written to disk by Zuma.
+
+The C# compatibility core records compact verification summaries separately from tool output. Entries contain only workspace, time, tool, status, failure count, the first location and message, and report paths. Rust reads the last entry matching the requested workspace; full logs remain available only through their existing paths.
+
 ## Execution gate
 
 `get_execution_gate`, `set_execution_gate`, and `reset_execution_gate` expose the 0.10.0 execution policy. The gate is disabled with `inazumaPwsh.executionGuard.enabled`; it is enabled by default.

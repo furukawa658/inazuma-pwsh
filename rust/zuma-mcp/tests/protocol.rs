@@ -4,11 +4,19 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn call(requests: &[Value]) -> Vec<Value> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_zuma-mcp"))
+    call_with_environment(requests, &[])
+}
+
+fn call_with_environment(requests: &[Value], environment: &[(&str, &str)]) -> Vec<Value> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zuma-mcp"));
+    command
+        .env("ZUMA_HANDOFF_ENABLED", "true")
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("Rust MCP server should start");
+        .stdout(Stdio::piped());
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().expect("Rust MCP server should start");
 
     {
         let stdin = child.stdin.as_mut().expect("stdin should be available");
@@ -67,7 +75,8 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 22);
+    assert_eq!(tools.len(), 23);
+    assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
     assert!(
         tools
             .iter()
@@ -78,7 +87,10 @@ fn array_tool_parameters_define_items() {
         "set_execution_gate",
         "reset_execution_gate",
     ] {
-        assert!(tools.iter().any(|tool| tool["name"] == name), "missing {name}");
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "missing {name}"
+        );
     }
     assert!(tools.iter().any(|tool| tool["name"] == "run_cargo_check"));
     assert!(tools.iter().any(|tool| tool["name"] == "read_symbol"));
@@ -242,6 +254,147 @@ fn handles_code_search_and_log_tools_without_sidecar() {
     assert_eq!(
         summary["tail"],
         serde_json::json!(["7: 例外 発生", "8: 0 エラー 1 警告"])
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prepares_a_bounded_handoff_from_a_synthetic_session() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("zuma-handoff-{unique}"));
+    std::fs::create_dir_all(&root).unwrap();
+    let session = root.join("session.jsonl");
+    let seed = serde_json::json!({
+        "kind": 0,
+        "v": {
+            "version": 3,
+            "customTitle": "Synthetic handoff",
+            "requests": [{
+                "message": { "text": "Implement safe handoff generation" },
+                "response": [],
+                "promptTokens": 1
+            }],
+            "inputState": { "inputText": "Continue with the tests" }
+        }
+    });
+    let long_next_action = format!(
+        "Next: update the Marketplace display name {}",
+        "x".repeat(1800)
+    );
+    let replacement = serde_json::json!({
+        "kind": 1,
+        "k": ["inputState", "inputText"],
+        "v": long_next_action
+    });
+    let appended_request = serde_json::json!({
+        "kind": 2,
+        "k": ["requests"],
+        "v": [{
+            "message": { "text": "Keep the token secret=" },
+            "response": []
+        }]
+    });
+    std::fs::write(
+        &session,
+        [seed, replacement, appended_request]
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+
+    let responses = call(&[
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "prepare_handoff", "arguments": { "sessionPath": session.to_string_lossy(), "workingDirectory": root.to_string_lossy(), "nextActionHint": long_next_action, "maxChars": 1000 } } }),
+    ]);
+
+    let tools = responses
+        .iter()
+        .find(|response| response["id"] == 2)
+        .unwrap()["result"]["tools"]
+        .as_array()
+        .unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
+    let payload = tool_payload(&responses, 3);
+    assert_eq!(payload["status"], "success");
+    assert!(
+        payload["handoffText"]
+            .as_str()
+            .unwrap()
+            .contains("Implement safe handoff generation")
+    );
+    assert!(
+        payload["handoffText"]
+            .as_str()
+            .unwrap()
+            .contains("NEXT_ACTION\n- Next: update the Marketplace display name")
+    );
+    assert!(!payload["handoffText"].as_str().unwrap().contains("secret="));
+    assert!(payload["sourceBytes"].as_u64().unwrap() > 0);
+    assert!(payload["responseBytes"].as_u64().unwrap() > 0);
+    assert!(payload["handoffText"].as_str().unwrap().chars().count() <= 1000);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn requires_explicit_handoff_selection_and_rejects_disabled_or_invalid_sessions() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("zuma-handoff-selection-{unique}"));
+    let sessions = root.join("workspace/chatSessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let seed = serde_json::json!({
+        "kind": 0,
+        "v": { "version": 3, "requests": [{ "message": { "text": "Goal" } }], "inputState": {} }
+    });
+    std::fs::write(sessions.join("one.jsonl"), seed.to_string()).unwrap();
+    std::fs::write(sessions.join("two.jsonl"), seed.to_string()).unwrap();
+    let invalid = root.join("invalid.jsonl");
+    std::fs::write(&invalid, "not-json").unwrap();
+
+    let common = [
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }),
+    ];
+    let candidate_request = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "prepare_handoff", "arguments": {} } });
+    let candidate_responses = call_with_environment(
+        &[common[0].clone(), common[1].clone(), candidate_request],
+        &[("ZUMA_CHAT_STORAGE_ROOT", root.to_str().unwrap())],
+    );
+    let candidates = tool_payload(&candidate_responses, 2);
+    assert_eq!(candidates["status"], "candidates");
+    assert_eq!(candidates["selectionRequired"], true);
+    assert_eq!(candidates["candidates"].as_array().unwrap().len(), 2);
+    assert!(candidates.get("handoffText").is_none());
+
+    let disabled_request = serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "prepare_handoff", "arguments": { "sessionPath": invalid.to_string_lossy() } } });
+    let disabled_responses = call_with_environment(
+        &[common[0].clone(), common[1].clone(), disabled_request],
+        &[("ZUMA_HANDOFF_ENABLED", "false")],
+    );
+    let disabled = tool_payload(&disabled_responses, 3);
+    assert_eq!(disabled["status"], "error");
+    assert!(disabled["message"].as_str().unwrap().contains("disabled"));
+
+    let invalid_request = serde_json::json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "prepare_handoff", "arguments": { "sessionPath": invalid.to_string_lossy() } } });
+    let invalid_responses = call(&[common[0].clone(), common[1].clone(), invalid_request]);
+    let invalid_payload = tool_payload(&invalid_responses, 4);
+    assert_eq!(invalid_payload["status"], "error");
+    assert!(
+        invalid_payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("line 1")
     );
 
     std::fs::remove_dir_all(root).unwrap();

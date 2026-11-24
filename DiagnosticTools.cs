@@ -382,7 +382,9 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime, Execution
             var report = await action(directory, linked.Token);
             var postflight = await executionGate.EvaluateAsync(tool, workingDirectory, normalizedCommand, testRun, hasSpecificTarget,
                 report, linked.Token);
-            return ExecutionGate.ApplyMetadata(report, postflight);
+            var finalReport = ExecutionGate.ApplyMetadata(report, postflight);
+            RecentVerificationStore.Record(tool, workingDirectory, finalReport);
+            return finalReport;
         }
         catch (OperationCanceledException) { UsageLog.RecordCall(tool); return JsonDefaults.Serialize(new { status = "cancelled" }); }
         catch (Exception exception) when (exception is IOException or ArgumentException or System.ComponentModel.Win32Exception)

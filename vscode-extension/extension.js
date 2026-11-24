@@ -160,7 +160,8 @@ function activate(context) {
                 ZUMA_EXECUTION_GATE_THRESHOLD: String(config.get('executionGuard.repeatFailureThreshold', 3)),
                 ZUMA_EXECUTION_GATE_HISTORY_SECONDS: String(config.get('executionGuard.historySeconds', 120)),
                 ZUMA_EXECUTION_GATE_SKIP_RED_PHASE: String(config.get('executionGuard.skipRedPhase', false)),
-                ZUMA_EXECUTION_GATE_GENERATION: String(executionGateGeneration)
+                ZUMA_EXECUTION_GATE_GENERATION: String(executionGateGeneration),
+                ZUMA_HANDOFF_ENABLED: String(config.get('handoff.enabled', false))
             };
             if (pwshPath) environment.INAZUMA_PWSH_PATH = pwshPath;
             if (workspaceRoot?.scheme === 'file') environment.ZUMA_WORKSPACE_ROOT = workspaceRoot.fsPath;
@@ -180,7 +181,7 @@ function activate(context) {
         vscode.lm.registerMcpServerDefinitionProvider('inazuma-pwsh.server', provider),
         changes,
         vscode.workspace.onDidChangeConfiguration(event => {
-            if (event.affectsConfiguration('inazumaPwsh.pwshPath') || event.affectsConfiguration('inazumaPwsh.executionGuard')) changes.fire();
+            if (event.affectsConfiguration('inazumaPwsh.pwshPath') || event.affectsConfiguration('inazumaPwsh.executionGuard') || event.affectsConfiguration('inazumaPwsh.handoff')) changes.fire();
         }),
         vscode.workspace.onDidChangeWorkspaceFolders(() => changes.fire()));
     registerSavings(context);

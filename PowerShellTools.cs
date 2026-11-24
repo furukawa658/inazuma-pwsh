@@ -51,7 +51,9 @@ public sealed class PowerShellTools
         var postflight = await _executionGate.EvaluateAsync("execute_powershell", effectiveDirectory, script,
             true, ExecutionGate.HasSpecificTestTarget(script), report, cancellationToken);
         UsageLog.RecordCall("execute_powershell");
-        return ExecutionGate.ApplyMetadata(report, postflight);
+        var finalReport = ExecutionGate.ApplyMetadata(report, postflight);
+        RecentVerificationStore.Record("execute_powershell", effectiveDirectory, finalReport);
+        return finalReport;
     }
 
     [McpServerTool(Name = "reset_powershell_session")]

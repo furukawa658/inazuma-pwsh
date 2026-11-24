@@ -96,21 +96,23 @@ async function main() {
         ZUMA_EXECUTION_GATE_THRESHOLD: '3',
         ZUMA_EXECUTION_GATE_HISTORY_SECONDS: '120',
         ZUMA_EXECUTION_GATE_SKIP_RED_PHASE: 'false',
-        ZUMA_EXECUTION_GATE_GENERATION: '0'
+        ZUMA_EXECUTION_GATE_GENERATION: '0',
+        ZUMA_HANDOFF_ENABLED: 'false'
     }));
     assert.equal(definition.cwd, path.dirname(definition.command));
     assert.equal(await provider.resolveMcpServerDefinition(definition), definition);
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.10.1');
+    assert.equal(manifest.version, '0.11.0');
+    assert.equal(manifest.displayName, 'Zuma MCP: Context & Log Optimizer for AI Coding');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.10.1-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.11.0-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping
