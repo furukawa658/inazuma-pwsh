@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add `set_task_anchor`, `get_task_anchor`, and `clear_task_anchor` to keep the current goal, target, acceptance criteria, scope exclusions, and allowed paths visible during long chats.
+- Append the active task anchor to synchronous and asynchronous tool responses, and warn when a file, trace, Python executable, or working directory is outside `allowedPaths`.
+- Include an MCP initialization instruction that asks agents to set an anchor for substantial work and update it when scope changes. Anchor state remains local to the Zuma server process and is never written to a chat log.
+
 ## 0.11.0
 
 - Add `prepare_handoff` to discover VS Code chat-session candidates without silently selecting one, replay the current JSONL delta format, and return a bounded handoff context in Rust.

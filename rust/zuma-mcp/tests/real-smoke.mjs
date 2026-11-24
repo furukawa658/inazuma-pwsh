@@ -92,12 +92,25 @@ async function verifyTasks() {
     }
   };
   try {
+    const anchorResult = (await taskRequest('tools/call', {
+      name: 'set_task_anchor',
+      arguments: {
+        goal: 'Verify asynchronous execution',
+        target: 'MCP task anchor propagation',
+        acceptanceCriteria: ['Task responses contain the anchor'],
+        outOfScope: ['Unrelated package work'],
+        allowedPaths: [root],
+        sessionId: 'task-anchor'
+      }
+    }).response).result;
+    assert.equal(JSON.parse(anchorResult.content[0].text).status, 'set');
     const completedTask = (await taskRequest('tools/call', {
       name: 'execute_powershell',
       arguments: { script: 'Start-Sleep -Milliseconds 50; 42', sessionId: 'task-complete' },
       _meta: taskMeta
     }).response).result;
     assert.equal(completedTask.resultType, 'task', JSON.stringify(completedTask));
+    assert.equal(completedTask.taskAnchor.target, 'MCP task anchor propagation');
     let completed;
     const completedDeadline = Date.now() + 10000;
     do {
@@ -106,6 +119,7 @@ async function verifyTasks() {
       await new Promise(resolve => setTimeout(resolve, completed.pollIntervalMs ?? 250));
     } while (Date.now() < completedDeadline);
     assert.equal(completed.status, 'completed', JSON.stringify(completed));
+    assert.equal(completed.taskAnchor.target, 'MCP task anchor propagation');
     assert.equal(textResult(completed).data, 42);
 
     const pendingTask = (await taskRequest('tools/call', {
@@ -149,8 +163,10 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 23);
+  assert.equal(tools.result.tools.length, 26);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
+  for (const name of ['set_task_anchor', 'get_task_anchor', 'clear_task_anchor'])
+    assert.ok(tools.result.tools.some(tool => tool.name === name), `missing ${name}`);
   assert.ok(tools.result.tools.some(tool => tool.name === 'prepare_handoff'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_cargo_check'));
@@ -166,8 +182,18 @@ try {
   };
   const shell = (script, extra = {}) => callTool('execute_powershell', { script, ...extra });
 
+  const anchor = await callTool('set_task_anchor', {
+    goal: 'Verify the packaged Zuma server',
+    target: 'Task anchor and existing tools',
+    acceptanceCriteria: ['Protocol and package smoke checks pass'],
+    outOfScope: ['Marketplace publication'],
+    allowedPaths: [root],
+    sessionId: 'real-smoke'
+  });
+  assert.equal(anchor.status, 'set');
   const peek = await callTool('peek_file', { path: path.join(root, 'README.md') });
   assert.equal(peek.status, 'success');
+  assert.equal(peek.taskAnchor.target, 'Task anchor and existing tools');
   assert.ok(peek.entries.length > 0);
   const codePeek = await callTool('peek_file', { path: path.join(root, 'FileReadingTools.cs') });
   assert.ok(codePeek.entries.some(entry => entry.includes('ReadSymbol')));
@@ -275,8 +301,10 @@ try {
   assert.match(handoff.handoffText, /Verify the packaged Zuma handoff/);
   assert.match(handoff.handoffText, /run_dotnet_build: success/);
   assert.match(handoff.handoffText, /Continue with release verification/);
+  const cleared = await callTool('clear_task_anchor', {});
+  assert.equal(cleared.status, 'cleared');
   await rm(buildProject, { recursive: true, force: true });
-  console.log('REAL_SMOKE_OK tools=23 parallel=true cancellation=true dotnet_build=success handoff=success');
+  console.log('REAL_SMOKE_OK tools=26 anchor=true parallel=true cancellation=true dotnet_build=success handoff=success');
 } finally {
   child.stdin.end();
   child.kill();

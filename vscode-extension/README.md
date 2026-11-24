@@ -24,7 +24,17 @@ Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust fi
 - **Non-blocking long work:** Task-aware MCP clients can poll and cancel PowerShell, build, test, lint, and type-check operations while existing clients keep synchronous calls.
 - **Automatic VS Code integration:** The extension registers its MCP server and bundles the Rust front end, C# compatibility core, and PowerShell worker. No manual `mcp.json` setup is required.
 
-## Available Tools (23 Tools)
+## Available Tools (26 Tools)
+
+### Task anchor
+
+| Tool | Purpose |
+| --- | --- |
+| `set_task_anchor` | Register the current goal, target, acceptance criteria, out-of-scope items, and absolute allowed paths. Zuma appends the anchor to later tool responses. |
+| `get_task_anchor` | Return the active task anchor. |
+| `clear_task_anchor` | Clear the active task anchor after the task is complete or when a new unrelated task starts. |
+
+Set an anchor once at the start of a substantial task and update it when the goal or scope changes. Path-bearing tool calls outside `allowedPaths` return a `scopeWarnings` entry; this is a reminder, not a filesystem sandbox. Anchor state stays in the Zuma server process and is not persisted with the chat or included in handoff logs.
 
 ### Execution Gate
 
@@ -90,8 +100,8 @@ Clients using MCP protocol revision `2026-07-28` and the `io.modelcontextprotoco
 
 After installing the extension and approving its MCP tools, ask your agent to use Zuma MCP. For example:
 
-- "Use a dedicated Zuma MCP session for this chat. Load my module, then reuse it for the next commands."
-- "Build this .NET project with Zuma MCP. Show the compiler errors first and consult the full log if the build fails outside compilation."
+- "Use a dedicated Zuma MCP session for this chat. Set a task anchor for the target, acceptance criteria, and allowed paths. Load my module, then reuse it for the next commands."
+- "Build this .NET project with Zuma MCP. Keep the task anchor focused on this build, then show the compiler errors first and consult the full log if compilation is outside the report."
 - "Run this project's Playwright tests and summarize the failures and available trace paths."
 - "Inspect this Playwright trace for failed actions, HTTP errors, and console errors."
 - "Run the pytest suite with Zuma MCP and fix the first failure."
