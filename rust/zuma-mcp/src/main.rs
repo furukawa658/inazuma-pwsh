@@ -642,7 +642,9 @@ fn call_tool(client_id: &Value, params: &Value, bridge: &Bridge) -> Value {
         return json!({ "content": [{ "type": "text", "text": response }] });
     }
 
-    forward_response(bridge.request_for(client_id, "tools/call", params.clone()))
+    let response = bridge.request_for(client_id, "tools/call", params.clone());
+    handoff::record_verification(name, arguments, &response);
+    forward_response(response)
 }
 
 fn handle_request(request: Request, bridge: &Bridge) -> Option<Value> {

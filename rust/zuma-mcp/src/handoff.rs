@@ -1,9 +1,11 @@
 use serde_json::{Value, json};
 use std::env;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_CHARS: usize = 6000;
 const MAX_INPUT_BYTES: u64 = 50 * 1024 * 1024;
@@ -252,11 +254,115 @@ fn push_section(lines: &mut Vec<String>, title: &str, values: impl IntoIterator<
     lines.extend(values.into_iter().map(|value| format!("- {value}")));
 }
 
+fn verification_history_path() -> PathBuf {
+    env::var_os("ZUMA_VERIFICATION_HISTORY_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            env::temp_dir()
+                .join("inazuma-pwsh-logs")
+                .join("verification-history.jsonl")
+        })
+}
+
+pub fn record_verification(
+    tool: &str,
+    arguments: &Value,
+    response: &Result<Value, String>,
+) {
+    if !matches!(
+        tool,
+        "run_dotnet_build"
+            | "run_dotnet_test"
+            | "run_playwright"
+            | "run_bun_test"
+            | "run_pytest"
+            | "run_vitest"
+            | "run_tsc"
+            | "run_eslint"
+            | "run_cargo_check"
+    ) {
+        return;
+    }
+    let Ok(response) = response else { return };
+    let Some(working_directory) = string_argument(arguments, "workingDirectory") else {
+        return;
+    };
+    let Some(text) = response
+        .get("result")
+        .and_then(|result| result.get("content"))
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|item| item.get("text"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let Ok(report) = serde_json::from_str::<Value>(text) else {
+        return;
+    };
+    let failures = report.get("failures").and_then(Value::as_array);
+    let diagnostics = report.get("diagnostics").and_then(Value::as_array);
+    let errors = report.get("errors").and_then(Value::as_array);
+    let primary = failures
+        .and_then(|values| values.first())
+        .or_else(|| diagnostics.and_then(|values| values.first()))
+        .or_else(|| errors.and_then(|values| values.first()));
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let failure_count = failures
+        .map(|values| values.len())
+        .or_else(|| {
+            report
+                .get("stats")
+                .and_then(|stats| stats.get("failed"))
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+        })
+        .or_else(|| errors.map(|values| values.len()))
+        .or_else(|| diagnostics.map(|values| values.len()))
+        .unwrap_or(0);
+    let mut entry = json!({
+        "time": time,
+        "tool": tool,
+        "workspace": working_directory,
+        "status": report.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+        "failureCount": failure_count,
+        "fullLogPath": report.get("fullLogPath").and_then(Value::as_str),
+        "fullReportPath": report.get("fullReportPath").and_then(Value::as_str)
+    });
+    if let Some(primary) = primary {
+        let file = primary.get("file").and_then(Value::as_str).unwrap_or("");
+        let line = primary.get("line").and_then(Value::as_u64);
+        let message = primary.get("message").and_then(Value::as_str).unwrap_or("");
+        entry["firstFailure"] = json!({
+            "file": bounded_text(redact(file), 300),
+            "line": line,
+            "message": bounded_text(redact(message), 300)
+        });
+    }
+
+    static GATE: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = GATE.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let path = verification_history_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::metadata(&path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+        > 1024 * 1024
+    {
+        let _ = fs::remove_file(&path);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{entry}");
+    }
+}
+
 fn last_verification(working_directory: &str) -> Option<String> {
-    let path = env::temp_dir()
-        .join("inazuma-pwsh-logs")
-        .join("verification-history.jsonl");
-    let file = File::open(path).ok()?;
+    let file = File::open(verification_history_path()).ok()?;
     let mut latest = None;
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let Ok(entry) = serde_json::from_str::<Value>(&line) else {

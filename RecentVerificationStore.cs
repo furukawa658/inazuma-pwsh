@@ -60,7 +60,10 @@ internal static class RecentVerificationStore
         {
             var directory = Path.Combine(Path.GetTempPath(), "inazuma-pwsh-logs");
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, "verification-history.jsonl");
+            var path = Environment.GetEnvironmentVariable("ZUMA_VERIFICATION_HISTORY_PATH")
+                ?? Path.Combine(directory, "verification-history.jsonl");
+            var parent = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
             if (File.Exists(path) && new FileInfo(path).Length > MaxBytes) File.Delete(path);
             File.AppendAllText(path, json + Environment.NewLine);
         }

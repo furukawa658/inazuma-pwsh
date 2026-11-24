@@ -13,11 +13,17 @@ const hostRid = process.platform === 'win32' ? 'win-x64'
   : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
 const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostRid,
   process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
+const verificationHistoryPath = path.join(tmpdir(), `zuma-real-verification-${process.pid}.jsonl`);
 
 const child = spawn(executable, [], {
   cwd: root,
   stdio: ['pipe', 'pipe', 'pipe'],
-  env: { ...process.env, ZUMA_WORKSPACE_ROOT: root, ZUMA_HANDOFF_ENABLED: 'true' }
+  env: {
+    ...process.env,
+    ZUMA_WORKSPACE_ROOT: root,
+    ZUMA_HANDOFF_ENABLED: 'true',
+    ZUMA_VERIFICATION_HISTORY_PATH: verificationHistoryPath
+  }
 });
 const pending = new Map();
 let nextId = 1;
@@ -246,6 +252,8 @@ try {
     timeoutSeconds: 180
   }, 200000);
   assert.equal(build.status, 'success', JSON.stringify(build));
+  const verificationRows = (await readFile(verificationHistoryPath, 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
+  assert.ok(verificationRows.some(row => row.tool === 'run_dotnet_build' && row.status === 'success' && row.workspace === buildProject));
   const sessionPath = path.join(buildProject, 'synthetic-chat.jsonl');
   await writeFile(sessionPath, JSON.stringify({
     kind: 0,
@@ -272,6 +280,7 @@ try {
 } finally {
   child.stdin.end();
   child.kill();
+  await rm(verificationHistoryPath, { force: true });
 }
 
 const parent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
