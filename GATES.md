@@ -19,5 +19,5 @@ Scope: Add safe deterministic chat handoff generation, Marketplace messaging, re
   EXPECT: PACKAGE_OK
   EVIDENCE: 0.11.0 win32-x64 VSIX packaged; 23-tool real smoke, cancellation, dotnet build, handoff, and parent lifetime passed on 2026-11-24
 
-- [ ] G4: Marketplace release 0.11.0 is published and its display name is visible
-  EVIDENCE: pending
+- [x] G4: Marketplace release 0.11.0 is published and its display name is visible
+  EVIDENCE: GitHub Actions publish run 45335945305 completed for all five targets on 2026-11-24; Marketplace Gallery reports 0.11.0 for win32-x64, linux-x64, linux-arm64, darwin-x64, and darwin-arm64 with display name `Zuma MCP: Context & Log Optimizer for AI Coding`
