@@ -41,9 +41,19 @@ fn read_lines(path: &Path) -> Result<Vec<String>, String> {
     Ok(text.lines().map(str::to_owned).collect())
 }
 
+pub fn path_problem(path: &Path, what: &str) -> String {
+    if !path.is_absolute() {
+        format!("Path must be absolute: {}", path.display())
+    } else if !path.exists() {
+        format!("Path does not exist: {}", path.display())
+    } else {
+        format!("Path is not an existing {what}: {}", path.display())
+    }
+}
+
 fn validate_file(path: &Path) -> Result<(), String> {
     if !path.is_absolute() || !path.is_file() {
-        return Err("Path must be an existing absolute file path.".to_string());
+        return Err(path_problem(path, "file"));
     }
     let bytes = fs::metadata(path).map_err(|error| error.to_string())?.len();
     if bytes > 50 * 1024 * 1024 {
@@ -271,7 +281,7 @@ pub fn summarize_log(arguments: &Value) -> Value {
     let mut matched_lines = 0;
 
     for (index, line) in lines.iter().enumerate() {
-        let clean = ansi_regex.replace_all(line, "").trim().to_string();
+        let clean = normalize_jsonl(ansi_regex.replace_all(line, "").trim());
         let searchable = if pattern == DEFAULT_LOG_PATTERN {
             zero_regex.replace_all(&clean, "").to_string()
         } else {
@@ -381,6 +391,28 @@ pub fn summarize_log(arguments: &Value) -> Value {
     }
 }
 
+// JSONL行は「[level] message」へ畳み、件数集計とパターン照合を行単位の文字列で行えるようにする。
+fn normalize_jsonl(line: &str) -> String {
+    if !line.starts_with('{') {
+        return line.to_string();
+    }
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(line) else {
+        return line.to_string();
+    };
+    let field = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| object.get(*name).and_then(Value::as_str))
+    };
+    let Some(message) = field(&["message", "msg", "error", "text"]) else {
+        return line.to_string();
+    };
+    match field(&["level", "severity", "status"]) {
+        Some(level) => format!("[{level}] {message}"),
+        None => message.to_string(),
+    }
+}
+
 #[derive(Clone)]
 struct LogGroup {
     count: usize,
@@ -437,7 +469,7 @@ pub fn search_files(arguments: &Value) -> Value {
     };
     let root = Path::new(path_text);
     if !root.is_absolute() || (!root.is_dir() && !root.is_file()) {
-        return json!({ "status": "error", "message": "Path must be an existing absolute directory or file path." });
+        return json!({ "status": "error", "message": path_problem(root, "directory or file") });
     }
     let pattern = match arguments.get("pattern").and_then(Value::as_str) {
         Some(pattern) => pattern,
@@ -857,4 +889,19 @@ fn git_ignored_files(base: &Path, files: &[PathBuf]) -> Result<HashSet<PathBuf>,
                 .join(String::from_utf8_lossy(entry).replace('/', std::path::MAIN_SEPARATOR_STR))
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_jsonl;
+
+    #[test]
+    fn collapses_jsonl_to_level_and_message() {
+        assert_eq!(
+            normalize_jsonl(r#"{"level":"error","message":"boom","ts":1}"#),
+            "[error] boom"
+        );
+        assert_eq!(normalize_jsonl("plain line"), "plain line");
+        assert_eq!(normalize_jsonl(r#"{"a":1}"#), r#"{"a":1}"#);
+    }
 }

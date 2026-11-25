@@ -371,7 +371,7 @@ fn peek_file(arguments: &Value) -> Value {
     };
     let path = Path::new(path_text);
     if !path.is_absolute() || !path.is_file() {
-        return json!({ "status": "error", "message": "File must be an existing absolute path." });
+        return json!({ "status": "error", "message": file_tools::path_problem(path, "file") });
     }
 
     let lines = match read_lines(path) {
@@ -379,6 +379,7 @@ fn peek_file(arguments: &Value) -> Value {
         Err(message) => return json!({ "status": "error", "message": message }),
     };
     let kind = determine_kind(path);
+    let file_bytes = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
     let mut entries = if kind == "markdown" {
         markdown_outline(&lines)
     } else if kind == "code" {
@@ -416,8 +417,8 @@ fn peek_file(arguments: &Value) -> Value {
         "kind": kind,
         "encoding": "utf-8",
         "lines": lines.len(),
-        "bytes": fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0),
-        "recommend": if lines.len() <= integer_argument(arguments, "fullThreshold", 200).clamp(1, 5000) { "FULL" } else { "PARTIAL" },
+        "bytes": file_bytes,
+        "recommend": if lines.len() <= integer_argument(arguments, "fullThreshold", 200).clamp(1, 5000) && file_bytes <= 20_000 { "FULL" } else { "PARTIAL" },
         "entries": rendered,
         "entriesTruncated": entries_truncated
     })
@@ -430,7 +431,7 @@ fn read_section(arguments: &Value) -> Value {
     };
     let path = Path::new(path_text);
     if !path.is_absolute() || !path.is_file() {
-        return json!({ "status": "error", "message": "File must be an existing absolute path." });
+        return json!({ "status": "error", "message": file_tools::path_problem(path, "file") });
     }
     let Some(start) = arguments
         .get("startLine")
@@ -544,6 +545,38 @@ fn legacy_tool_definitions() -> Value {
         { "name": "plan_context_read", "description": "Rank the smallest next file, symbol, or section read for a question.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "question": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["workingDirectory", "question"] } },
         { "name": "prepare_handoff", "description": "Prepare a bounded AI handoff from an explicitly selected VS Code chat session.", "inputSchema": { "type": "object", "properties": { "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } } } }
     ] })
+}
+
+fn visible_tool_definitions() -> Value {
+    let mut definitions = tool_definitions();
+    if !handoff::enabled()
+        && let Some(tools) = definitions["tools"].as_array_mut()
+    {
+        tools.retain(|tool| !matches!(tool["name"].as_str(), Some("zuma_handoff" | "prepare_handoff")));
+    }
+    definitions
+}
+
+fn missing_required_arguments(name: &str, arguments: &Value) -> Option<String> {
+    let definitions = tool_definitions();
+    let tool = definitions["tools"]
+        .as_array()?
+        .iter()
+        .find(|tool| tool["name"] == name)?;
+    let missing: Vec<&str> = tool["inputSchema"]["required"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|field| arguments.get(*field).is_none_or(Value::is_null))
+        .collect();
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Missing required argument(s) for {name}: {}.",
+            missing.join(", ")
+        ))
+    }
 }
 
 fn uses_task_protocol(params: &Value) -> bool {
@@ -721,6 +754,12 @@ fn call_tool(
         }
     };
 
+    if routed.is_some()
+        && let Some(message) = missing_required_arguments(name, arguments)
+    {
+        return json!({ "content": [{ "type": "text", "text": json!({ "status": "error", "message": message }).to_string() }], "isError": true });
+    }
+
     if name == "set_task_anchor" {
         return json!({ "content": [{ "type": "text", "text": bridge.task_anchors.set(arguments).to_string() }] });
     }
@@ -825,7 +864,7 @@ fn handle_request(request: Request, bridge: &Bridge, task_anchor: Option<&Value>
             "instructions": "At the start of a substantial task, call set_task_anchor with the goal, target, acceptance criteria, out-of-scope items, and absolute allowed paths. Keep it updated when scope changes and clear it only when the task is complete."
         }),
         "ping" => json!({}),
-        "tools/list" => tool_definitions(),
+        "tools/list" => visible_tool_definitions(),
         "tools/call" => call_tool(&id, &request.params, bridge, task_anchor),
         _ => {
             return Some(json!({

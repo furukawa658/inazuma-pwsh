@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.3
+
+- Validate required arguments in the facade and report missing names.
+- Distinguish missing, relative and wrong-type paths in read tools.
+- Suppress allowedPaths warnings for read-only tools.
+- Normalize JSONL lines in summarize_log; consider file size in peek_file recommend.
+- Hide handoff tools while handoff is disabled; clearer semantic_git_diff, tsc and list_sessions messages.
+
 ## 1.0.2
 
 - Fix the Marketplace Before/After GIF reference by using the public raw asset URL for the release branch.

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_MAX_CHARS: usize = 6000;
 const MAX_INPUT_BYTES: u64 = 50 * 1024 * 1024;
 
-fn enabled() -> bool {
+pub fn enabled() -> bool {
     env::var("ZUMA_HANDOFF_ENABLED")
         .ok()
         .is_some_and(|value| value.eq_ignore_ascii_case("true"))
@@ -565,7 +565,7 @@ fn find_candidates(session_id: Option<&str>, include_titles: bool) -> Vec<Value>
 pub fn prepare_handoff(arguments: &Value) -> Value {
     if !enabled() {
         return error(
-            "Chat handoff is disabled. Enable inazumaPwsh.handoff.enabled before calling prepare_handoff.",
+            "Chat handoff is disabled. Set inazumaPwsh.handoff.enabled to true in VS Code settings (ZUMA_HANDOFF_ENABLED=true) and restart the MCP server, then call prepare_handoff again.",
         );
     }
 

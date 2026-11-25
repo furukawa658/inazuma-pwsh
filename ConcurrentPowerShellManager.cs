@@ -47,6 +47,9 @@ public sealed class ConcurrentPowerShellManager : IDisposable
             return JsonDefaults.Serialize(new
             {
                 status = "success",
+                note = _sessions.Count == 0
+                    ? "No active sessions. Sessions are created by a successful execute and removed after 10 idle minutes; calls blocked by the execution gate do not create one."
+                    : null,
                 sessions = _sessions.Select(pair => new
                 {
                     sessionId = pair.Key,

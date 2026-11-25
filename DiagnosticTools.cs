@@ -196,7 +196,7 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime, Execution
                     throw new ArgumentException("tscPath must be an existing absolute file path.");
             }
             else cli = FindPackageFile(workingDirectory, ["typescript"], Path.Combine("lib", "tsc.js"));
-            if (cli == null) throw new FileNotFoundException("Local TypeScript compiler was not found. Install project dependencies first.");
+            if (cli == null) throw new FileNotFoundException($"Local TypeScript compiler was not found under {workingDirectory} or its parents (node_modules/typescript/lib/tsc.js). Install project dependencies or pass tscPath.");
             var arguments = new List<string> { cli };
             arguments.AddRange(tscArgs ?? []);
             if (!build) arguments.Add("--noEmit");
