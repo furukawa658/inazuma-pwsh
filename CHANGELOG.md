@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+- Fix purpose-based router calls in packaged builds. Routes such as `zuma_shell`, `zuma_execute`, `zuma_read`, `zuma_context`, `zuma_gate`, and `zuma_handoff` now forward the selected compatibility tool and arguments to the C# core instead of forwarding the router name unchanged.
+
 ## 1.0.0
 
 - Replace the 33-tool flat surface with seven purpose-based routers: `zuma_task`, `zuma_shell`, `zuma_execute`, `zuma_read`, `zuma_context`, `zuma_gate`, and `zuma_handoff`.

@@ -774,7 +774,16 @@ fn call_tool(
         return result;
     }
 
-    let response = bridge.request_for(client_id, "tools/call", params.clone());
+    let forwarded_params = if let Some((routed_name, routed_arguments)) = routed.as_ref() {
+        json!({
+            "name": routed_name,
+            "arguments": routed_arguments,
+            "_meta": params.get("_meta").cloned().unwrap_or(Value::Null)
+        })
+    } else {
+        params.clone()
+    };
+    let response = bridge.request_for(client_id, "tools/call", forwarded_params);
     handoff::record_verification(name, arguments, &response);
     let mut result = forward_response(response);
     task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
@@ -931,6 +940,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routes_public_shell_tool_to_compatibility_name() {
+        let params = serde_json::json!({
+            "name": "zuma_shell",
+            "arguments": { "operation": "list_sessions" }
+        });
+        let (name, arguments) = routed_params(&params).unwrap();
+        assert_eq!(name, "list_powershell_sessions");
+        assert_eq!(arguments, serde_json::json!({}));
+    }
 
     #[test]
     fn tool_definitions_include_context_router() {
