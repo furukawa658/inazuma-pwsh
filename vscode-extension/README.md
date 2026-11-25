@@ -39,11 +39,24 @@ Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust fi
 
 ## Measured context reduction
 
-On a 137,000-character log, Zuma returned a `store_capsule` response of 0.318% of the source size and a Delta Context response of 0.125% after the log grew by one line. The 0.14 Context Engine adds declaration-level diffs, persistent structured facts, bounded compilation, and question-first read planning. The packaged smoke test exposes all 33 tools and checks capsule budgets, context storage, compilation, parallel execution, cancellation, build, handoff, and parent lifetime.
+On a 137,000-character log, Zuma returned a `store_capsule` response of 0.318% of the source size and a Delta Context response of 0.125% after the log grew by one line. The 1.0 Context API exposes seven purpose-based routers and preserves direct compatibility calls for existing clients. The packaged smoke test checks capsule budgets, context storage, compilation, parallel execution, cancellation, build, handoff, and parent lifetime.
 
 These figures measure serialized MCP response characters against source characters. They are reproducible response-budget checks, not whole-chat token or billing measurements. The packaged real-smoke test, which CI runs on Windows, Linux, and macOS, fails if the initial response reaches 5% of the source or the delta response reaches 1%.
 
-## Available Tools (33 Tools)
+## Available Tools (7 Routers)
+
+| Router | Operations |
+| --- | --- |
+| `zuma_task` | `set`, `get`, `clear` |
+| `zuma_shell` | `execute`, `reset_session`, `list_sessions` |
+| `zuma_execute` | Build, test, lint, type-check, and affected-test runners |
+| `zuma_read` | File outlines, sections, symbols, log summaries, file search, and trace inspection |
+| `zuma_context` | Capsules, semantic Git diff, context memory, compilation, and read planning |
+| `zuma_gate` | `get`, `set`, `reset` execution-loop protection |
+| `zuma_handoff` | `prepare` a bounded chat handoff |
+
+The existing direct tool names remain callable for compatibility. New clients should use the routers and pass the operation that selects the implementation.
+
 
 ### Task anchor
 
@@ -155,6 +168,12 @@ After installing the extension and approving its MCP tools, ask your agent to us
 - "List safe chat-handoff candidates, let me choose one, then prepare the next chat context."
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
+
+## What's new in 1.0.0
+
+- **Purpose-based routers.** The public MCP surface has seven routers instead of 33 flat tools.
+- **Stable direct compatibility.** Existing direct tool names remain accepted by the implementation.
+- **Status-bar coverage.** Savings and execution-gate status bars continue to report measured reads and calls.
 
 ## What's new in 0.14.0
 
