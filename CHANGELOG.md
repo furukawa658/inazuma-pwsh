@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0
+
+- Add `store_capsule` and `query_capsule` for content-addressed local evidence, line or regex reads, unseen-line suppression, and appended-data delta queries. Capsule stores enforce age, count, size, and sensitive-content response limits.
+- Return compact `status: "duplicate"` responses for repeated file outlines, section reads, symbol reads, and log summaries while the same source version is unchanged. Rust local reads and C# compatibility reads use equivalent five-minute guards.
+- Add `28 Tools` documentation and MCP coverage for Evidence Capsule and Delta Context.
+- Add a packaged response-budget regression check that fails CI at 5% for capsule creation or 1% for Delta Context against a 137,000-character source.
+
 ## 0.12.1
 
 - Lead the Marketplace title and description with the Copilot Chat problem Zuma solves, and make log compression, focused reads, task anchors, and handoffs visible immediately.

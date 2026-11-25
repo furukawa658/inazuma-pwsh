@@ -84,6 +84,18 @@ VS Code exposes these settings under `inazumaPwsh.executionGuard.*`. The status 
 
 `summarize_log` detects English and Japanese error and warning terms by default and ignores zero-count summaries for those terms. A custom `pattern` is used as supplied.
 
+Repeated `peek_file`, `read_section`, `read_symbol`, and `summarize_log` calls with identical arguments and unchanged file length and modification time return `status: "duplicate"` for five minutes. The response contains no prior body text, but includes `requestHash`, `previousReturnedAt`, and `omittedResponseChars`. Changing arguments or the file invalidates the marker. This state remains in process memory and is shared by Rust local reads and C# compatibility reads.
+
+## Evidence capsules
+
+`store_capsule` accepts `kind` (`file`, `command-output`, `test-report`, or `log`) and either inline `content` or an absolute `sourcePath`, but not both. `workingDirectory` must be absolute. The store prefers `sourcePath` so large evidence does not need to enter the MCP request. `maxSummaryChars` is clamped from 80 through 4,000. The response contains no source body: it returns the capsule ID, source hash, counts, a compact summary, and a query hint.
+
+Capsule IDs derive from kind and content. Saving identical evidence returns the same ID with `reused: true`. Content is local UTF-8 plaintext under `%TEMP%/inazuma-pwsh-capsules` unless `ZUMA_CAPSULE_DIRECTORY` is set. Limits are 20 MB per capsule, 100 capsules, 200 MB total, and three days. Expired, least-recently-created, or excess-size entries are removed during later stores.
+
+`query_capsule` accepts a line range or a case-insensitive regular expression with a 100 ms timeout. `onlyUnseen` defaults to true and omits lines already returned for the same capsule in this server process. `baseCapsuleId` returns the suffix beginning at the first line that differs from the earlier capsule when no explicit range is supplied. `maxChars` is clamped from 1,000 through 50,000 and `hasMore`/`nextLine` support continuation.
+
+Capsules are plaintext and use the current user's filesystem permissions. A body matching a credential-like assignment, bearer token, or URL query returns `status: "sensitive"` with an empty `matches` array instead of source content. Do not store content that must not remain on the local machine; Zuma does not encrypt capsule files.
+
 ## Safety and logs
 
 Scripts run with the current user's permissions. Zuma MCP is not a security sandbox, and syntax checks do not restrict unauthorized system operations. Connect only trusted local clients, and do not put credentials in scripts. Avoid interactive commands, GUI prompts, authentication prompts, and elevation requests.

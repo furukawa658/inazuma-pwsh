@@ -28,7 +28,8 @@ Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust fi
 
 ## Why Developers Use Zuma MCP
 
-- **Cut context bloat:** Inspect file outlines, read exact symbols or sections, and summarize logs before loading raw text into chat.
+- **Cut context bloat:** Inspect file outlines, read exact symbols or sections, summarize logs, and keep large evidence in local capsules before loading raw text into chat.
+- **Never replay the same read:** Exact repeated file, symbol, section, and log reads return a compact duplicate marker while the file is unchanged.
 - **Start on native Rust:** Every packaged platform starts a lightweight Rust MCP front end for UTF-8 file outlines, Git-aware search, and log summaries.
 - **Find only new regressions:** Run tests affected by Git changes, filter compiler and lint diagnostics to new findings, and keep only newly failing test transitions.
 - **Stop repeated failures:** Trip a circuit breaker when the same command, Git diff, and failure recur, and block unscoped full suites during incremental work.
@@ -36,7 +37,13 @@ Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust fi
 - **Non-blocking long work:** Task-aware MCP clients can poll and cancel PowerShell, build, test, lint, and type-check operations while existing clients keep synchronous calls.
 - **Automatic VS Code integration:** The extension registers its MCP server and bundles the Rust front end, C# compatibility core, and PowerShell worker. No manual `mcp.json` setup is required.
 
-## Available Tools (26 Tools)
+## Measured context reduction
+
+On a 137,000-character log, Zuma returned a `store_capsule` response of 0.318% of the source size and a Delta Context response of 0.125% after the log grew by one line. The same integration suite passed all 79 MCP checks; Rust passed 10 unit and 6 protocol tests; the packaged Windows smoke test exposed all 28 tools and passed parallel execution, cancellation, build, handoff, and parent-lifetime checks.
+
+These figures measure serialized MCP response characters against source characters. They are reproducible response-budget checks, not whole-chat token or billing measurements. The packaged real-smoke test, which CI runs on Windows, Linux, and macOS, fails if the initial response reaches 5% of the source or the delta response reaches 1%.
+
+## Available Tools (28 Tools)
 
 ### Task anchor
 
@@ -91,6 +98,17 @@ The circuit breaker is shared by typed diagnostic tools and test commands run th
 | `read_symbol` | Return one exact named declaration from a code file, including decorators and the complete symbol range. Overloads can be selected with `occurrence`. |
 | `summarize_log` | Group matching log lines with counts and context, and return the last lines of the log. |
 | `search_files` | Search text files under a directory with a regex and return per-file match counts and the first matching lines. |
+
+Exact repeated `peek_file`, `read_section`, `read_symbol`, and `summarize_log` calls for the same file version return `status: "duplicate"` and omit the prior response body for five minutes. A changed file size or timestamp automatically invalidates the marker.
+
+### Evidence capsules
+
+| Tool | Purpose |
+| --- | --- |
+| `store_capsule` | Save a local file or supplied text as content-addressed evidence and return a compact capsule ID, source hash, counts, and query hint. |
+| `query_capsule` | Return selected lines, regular-expression matches, or the appended delta from `baseCapsuleId`, omitting lines already returned in the same server process. |
+
+Prefer `sourcePath` over `content` so large evidence does not enter the chat request. Capsules are local temporary plaintext, deduplicated by content hash, and limited to 20 MB each, 100 capsules, 200 MB total, and three days. Potential credentials or sensitive URLs block content from `query_capsule`; the local capsule remains available to the operating-system user. `ZUMA_CAPSULE_DIRECTORY` can override the default `%TEMP%/inazuma-pwsh-capsules` location.
 
 ### Chat handoff
 

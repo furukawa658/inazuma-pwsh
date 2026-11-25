@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -13,9 +13,10 @@ const hostRid = process.platform === 'win32' ? 'win-x64'
   : process.platform === 'darwin' ? (process.arch === 'arm64' ? 'osx-arm64' : 'osx-x64')
   : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
 const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostRid, process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
+const capsuleDirectory = path.join(tmpdir(), `inazuma-test-capsules-${process.pid}-${Date.now()}`);
 const spawnStartedAt = performance.now();
 const server = spawn(executable, process.argv.slice(3), {
-    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '', ZUMA_WORKSPACE_ROOT: root }
+    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '', ZUMA_WORKSPACE_ROOT: root, ZUMA_CAPSULE_DIRECTORY: capsuleDirectory }
 });
 const pending = new Map();
 let nextId = 0;
@@ -108,9 +109,143 @@ try {
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
     assert.ok(listed.result.tools.some(tool => tool.name === 'read_symbol'));
-    for (const name of ['get_execution_gate', 'set_execution_gate', 'reset_execution_gate'])
+    for (const name of ['get_execution_gate', 'set_execution_gate', 'reset_execution_gate', 'store_capsule', 'query_capsule'])
         assert.ok(listed.result.tools.some(tool => tool.name === name), `missing ${name}`);
     await tool('set_execution_gate', { mode: 'manual', enabled: false });
+    await check('evidence capsules return only unseen context', async () => {
+        const sourcePath = path.join(fixture, 'capsule.log');
+        await writeFile(sourcePath, ['alpha', 'beta', 'gamma'].join('\n'));
+        const stored = await tool('store_capsule', {
+            kind: 'log',
+            sourcePath,
+            workingDirectory: fixture,
+            label: 'capsule-test',
+            maxSummaryChars: 80
+        });
+        assert.equal(stored.status, 'success', JSON.stringify(stored));
+        assert.equal(stored.reused, false);
+        assert.equal(stored.charCount, 16);
+        assert.ok(stored.summary.length <= 80);
+        assert.ok(!JSON.stringify(stored).includes('beta'));
+
+        const first = await tool('query_capsule', {
+            capsuleId: stored.capsuleId,
+            startLine: 1,
+            endLine: 2,
+            maxChars: 1000
+        });
+        assert.equal(first.status, 'success', JSON.stringify(first));
+        assert.deepEqual(first.matches.map(match => match.text), ['alpha', 'beta']);
+        assert.equal(first.duplicateCharsOmitted, 0);
+
+        const repeated = await tool('query_capsule', {
+            capsuleId: stored.capsuleId,
+            startLine: 1,
+            endLine: 2,
+            maxChars: 1000
+        });
+        assert.deepEqual(repeated.matches, []);
+        assert.ok(repeated.duplicateCharsOmitted > 0);
+
+        const appendPath = path.join(fixture, 'capsule.log');
+        await writeFile(appendPath, ['alpha', 'beta', 'gamma', 'delta'].join('\n'));
+        const updated = await tool('store_capsule', {
+            kind: 'log',
+            sourcePath: appendPath,
+            workingDirectory: fixture,
+            label: 'capsule-test',
+            maxSummaryChars: 80
+        });
+        assert.notEqual(updated.capsuleId, stored.capsuleId);
+        const delta = await tool('query_capsule', {
+            capsuleId: updated.capsuleId,
+            baseCapsuleId: stored.capsuleId,
+            maxChars: 1000
+        });
+        assert.deepEqual(delta.matches.map(match => match.text), ['delta']);
+
+        const sensitive = await tool('store_capsule', {
+            kind: 'log',
+            content: 'password=do-not-return-this',
+            workingDirectory: fixture,
+            label: 'sensitive-test'
+        });
+        const blocked = await tool('query_capsule', {
+            capsuleId: sensitive.capsuleId,
+            startLine: 1,
+            endLine: 1,
+            maxChars: 1000
+        });
+        assert.equal(blocked.status, 'sensitive');
+        assert.deepEqual(blocked.matches, []);
+        assert.ok(!JSON.stringify(blocked).includes('do-not-return-this'));
+
+        const expired = new Date(Date.now() - (4 * 24 * 60 * 60 * 1000));
+        await utimes(path.join(capsuleDirectory, `${updated.capsuleId}.txt`), expired, expired);
+        const restored = await tool('store_capsule', {
+            kind: 'log',
+            sourcePath: appendPath,
+            workingDirectory: fixture,
+            label: 'capsule-test'
+        });
+        assert.equal(restored.reused, false);
+        assert.equal(restored.capsuleId, updated.capsuleId);
+        const restoredQuery = await tool('query_capsule', {
+            capsuleId: restored.capsuleId,
+            startLine: 1,
+            endLine: 1,
+            maxChars: 1000
+        });
+        assert.equal(restoredQuery.status, 'success');
+        assert.deepEqual(restoredQuery.matches.map(match => match.text), ['alpha']);
+
+        const largePath = path.join(fixture, 'large-evidence.log');
+        await writeFile(largePath, 'x'.repeat(137000));
+        const largeBase = await tool('store_capsule', {
+            kind: 'log',
+            sourcePath: largePath,
+            workingDirectory: fixture,
+            label: 'large-evidence'
+        });
+        const storeResponseChars = JSON.stringify(largeBase).length;
+        assert.ok(storeResponseChars < 137000 * 0.05, `store response used ${storeResponseChars} characters`);
+
+        await writeFile(largePath, `${'x'.repeat(137000)}\ndelta`);
+        const largeUpdated = await tool('store_capsule', {
+            kind: 'log',
+            sourcePath: largePath,
+            workingDirectory: fixture,
+            label: 'large-evidence'
+        });
+        const largeDelta = await tool('query_capsule', {
+            capsuleId: largeUpdated.capsuleId,
+            baseCapsuleId: largeBase.capsuleId,
+            maxChars: 1000
+        });
+        const deltaResponseChars = JSON.stringify(largeDelta).length;
+        assert.deepEqual(largeDelta.matches.map(match => match.text), ['delta']);
+        assert.ok(deltaResponseChars < 137000 * 0.01, `delta response used ${deltaResponseChars} characters`);
+        console.log(`CAPSULE_RATIO ${((storeResponseChars / 137000) * 100).toFixed(3)}% DELTA_RATIO ${((deltaResponseChars / 137000) * 100).toFixed(3)}%`);
+    });
+    await check('redundant reads return compact duplicate marker', async () => {
+        const sourcePath = path.join(fixture, 'redundant-read.log');
+        await writeFile(sourcePath, ['alpha', 'beta'].join('\n'));
+        const request = { path: sourcePath, startLine: 1, endLine: 10, maxChars: 1000 };
+
+        const first = await tool('read_section', request);
+        assert.equal(first.status, 'success', JSON.stringify(first));
+        assert.ok(first.text.includes('beta'));
+
+        const repeated = await tool('read_section', request);
+        assert.equal(repeated.status, 'duplicate', JSON.stringify(repeated));
+        assert.equal(repeated.text, undefined);
+        assert.ok(repeated.omittedResponseChars > 0);
+
+        await writeFile(sourcePath, ['alpha', 'beta', 'gamma'].join('\n'));
+        const refreshed = await tool('read_section', request);
+        assert.equal(refreshed.status, 'success', JSON.stringify(refreshed));
+        assert.ok(refreshed.text.includes('gamma'));
+    });
     await check('execution gate blocks full suites and repeated failures', async () => {
         const project = path.join(fixture, 'execution-gate');
         const testPath = path.join(project, 'repeat.test.ts');
@@ -1936,5 +2071,6 @@ process.exitCode = 1;
         await exited;
     }
     await rm(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    await rm(capsuleDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
 

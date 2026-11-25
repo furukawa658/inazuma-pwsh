@@ -14,6 +14,7 @@ const hostRid = process.platform === 'win32' ? 'win-x64'
 const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostRid,
   process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
 const verificationHistoryPath = path.join(tmpdir(), `zuma-real-verification-${process.pid}.jsonl`);
+const capsuleDirectory = path.join(tmpdir(), `zuma-real-capsules-${process.pid}`);
 
 const child = spawn(executable, [], {
   cwd: root,
@@ -22,7 +23,8 @@ const child = spawn(executable, [], {
     ...process.env,
     ZUMA_WORKSPACE_ROOT: root,
     ZUMA_HANDOFF_ENABLED: 'true',
-    ZUMA_VERIFICATION_HISTORY_PATH: verificationHistoryPath
+    ZUMA_VERIFICATION_HISTORY_PATH: verificationHistoryPath,
+    ZUMA_CAPSULE_DIRECTORY: capsuleDirectory
   }
 });
 const pending = new Map();
@@ -163,9 +165,9 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 26);
+  assert.equal(tools.result.tools.length, 28);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
-  for (const name of ['set_task_anchor', 'get_task_anchor', 'clear_task_anchor'])
+  for (const name of ['set_task_anchor', 'get_task_anchor', 'clear_task_anchor', 'store_capsule', 'query_capsule'])
     assert.ok(tools.result.tools.some(tool => tool.name === name), `missing ${name}`);
   assert.ok(tools.result.tools.some(tool => tool.name === 'prepare_handoff'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
@@ -181,6 +183,36 @@ try {
     return textResult(response);
   };
   const shell = (script, extra = {}) => callTool('execute_powershell', { script, ...extra });
+
+  const budgetFixture = await mkdtemp(path.join(tmpdir(), 'zuma-real-budget-'));
+  const largeLogPath = path.join(budgetFixture, 'large.log');
+  await writeFile(largeLogPath, 'x'.repeat(137000));
+  const baseCapsule = await callTool('store_capsule', {
+    kind: 'log',
+    sourcePath: largeLogPath,
+    workingDirectory: budgetFixture,
+    label: 'packaged-response-budget'
+  });
+  const storeResponseChars = JSON.stringify(baseCapsule).length;
+  assert.ok(storeResponseChars < 137000 * 0.05, `store response used ${storeResponseChars} characters`);
+
+  await writeFile(largeLogPath, `${'x'.repeat(137000)}\ndelta`);
+  const updatedCapsule = await callTool('store_capsule', {
+    kind: 'log',
+    sourcePath: largeLogPath,
+    workingDirectory: budgetFixture,
+    label: 'packaged-response-budget'
+  });
+  const deltaCapsule = await callTool('query_capsule', {
+    capsuleId: updatedCapsule.capsuleId,
+    baseCapsuleId: baseCapsule.capsuleId,
+    maxChars: 1000
+  });
+  const deltaResponseChars = JSON.stringify(deltaCapsule).length;
+  assert.deepEqual(deltaCapsule.matches.map(match => match.text), ['delta']);
+  assert.ok(deltaResponseChars < 137000 * 0.01, `delta response used ${deltaResponseChars} characters`);
+  console.log(`PACKAGED_CAPSULE_RATIO ${((storeResponseChars / 137000) * 100).toFixed(3)}% DELTA_RATIO ${((deltaResponseChars / 137000) * 100).toFixed(3)}%`);
+  await rm(budgetFixture, { recursive: true, force: true });
 
   const anchor = await callTool('set_task_anchor', {
     goal: 'Verify the packaged Zuma server',
@@ -304,11 +336,12 @@ try {
   const cleared = await callTool('clear_task_anchor', {});
   assert.equal(cleared.status, 'cleared');
   await rm(buildProject, { recursive: true, force: true });
-  console.log('REAL_SMOKE_OK tools=26 anchor=true parallel=true cancellation=true dotnet_build=success handoff=success');
+  console.log('REAL_SMOKE_OK tools=28 anchor=true parallel=true cancellation=true dotnet_build=success handoff=success');
 } finally {
   child.stdin.end();
   child.kill();
   await rm(verificationHistoryPath, { force: true });
+  await rm(capsuleDirectory, { recursive: true, force: true });
 }
 
 const parent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
