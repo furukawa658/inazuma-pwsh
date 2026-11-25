@@ -29,5 +29,5 @@ Scope: Add deterministic semantic diff, persistent local context facts, compiled
   EXPECT: CONTEXT_RELEASE_OK
   EVIDENCE: 2026-11-25, version and workflow checks passed, CONTEXT_RELEASE_OK
 
-- [ ] G6: Marketplace 0.14.0 is published for all five platform targets
-  EVIDENCE: Pending
+- [x] G6: Marketplace 0.14.0 is published for all five platform targets
+  EVIDENCE: 2026-11-25, publish run 45567067184 passed win32-x64, linux-x64, linux-arm64, darwin-x64, and darwin-arm64
