@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0
+
+- Replace the 33-tool flat surface with seven purpose-based routers: `zuma_task`, `zuma_shell`, `zuma_execute`, `zuma_read`, `zuma_context`, `zuma_gate`, and `zuma_handoff`.
+- Route each operation to the existing implementation while preserving the same structured response and direct tool-call compatibility for installed clients.
+- Add protocol coverage that verifies the public tool list contains only the seven routers and array parameters declare items.
+
 ## 0.14.0
 
 - Add `semantic_git_diff` to replace raw Git output with declaration-level additions, removals, and modifications for changed and untracked files.

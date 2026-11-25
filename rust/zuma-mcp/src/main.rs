@@ -490,6 +490,26 @@ fn read_section(arguments: &Value) -> Value {
 
 fn tool_definitions() -> Value {
     json!({ "tools": [
+        { "name": "zuma_task", "description": "Manage the current task scope. Use operation set, get, or clear.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["set", "get", "clear"] }, "goal": { "type": "string" }, "target": { "type": "string" }, "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }, "outOfScope": { "type": "array", "items": { "type": "string" } }, "allowedPaths": { "type": "array", "items": { "type": "string" } }, "sessionId": { "type": "string" } }, "required": ["operation"] } },
+        { "name": "zuma_shell", "description": "Run or manage persistent PowerShell sessions. Operation: execute, reset_session, or list_sessions.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["execute", "reset_session", "list_sessions"] }, "script": { "type": "string" }, "timeoutSeconds": { "type": "integer" }, "workingDirectory": { "type": "string" }, "maxOutputChars": { "type": "integer" }, "sessionId": { "type": "string" }, "compactResponse": { "type": "boolean" } }, "required": ["operation"] } },
+        { "name": "zuma_execute", "description": "Run builds, tests, and static diagnostics. Operation selects dotnet_build, dotnet_test, affected_tests, playwright, bun_test, pytest, vitest, tsc, eslint, or cargo_check.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["dotnet_build", "dotnet_test", "affected_tests", "playwright", "bun_test", "pytest", "vitest", "tsc", "eslint", "cargo_check"] }, "workingDirectory": { "type": "string" }, "testArgs": { "type": "array", "items": { "type": "string" } }, "tscArgs": { "type": "array", "items": { "type": "string" } }, "eslintArgs": { "type": "array", "items": { "type": "string" } }, "cargoArgs": { "type": "array", "items": { "type": "string" } }, "target": { "type": "string" }, "includeWarnings": { "type": "boolean" }, "onlyNew": { "type": "boolean" }, "regressionsOnly": { "type": "boolean" }, "timeoutSeconds": { "type": "integer" }, "contextLines": { "type": "integer" }, "compactResponse": { "type": "boolean" }, "pythonPath": { "type": "string" } }, "required": ["operation", "workingDirectory"] } },
+        { "name": "zuma_read", "description": "Search or read bounded source and log content. Operation selects peek_file, read_section, read_symbol, summarize_log, search_files, or inspect_playwright_trace.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["peek_file", "read_section", "read_symbol", "summarize_log", "search_files", "inspect_playwright_trace"] }, "path": { "type": "string" }, "pattern": { "type": "string" }, "symbol": { "type": "string" }, "query": { "type": "string" }, "startLine": { "type": "integer" }, "endLine": { "type": "integer" }, "workingDirectory": { "type": "string" }, "tracePath": { "type": "string" }, "maxChars": { "type": "integer" }, "maxResults": { "type": "integer" }, "maxPerFile": { "type": "integer" }, "contextLines": { "type": "integer" }, "tailLines": { "type": "integer" }, "literal": { "type": "boolean" }, "exclude": { "type": "array", "items": { "type": "string" } }, "ranges": { "type": "array", "items": { "oneOf": [{ "type": "string" }, { "type": "object" }] } } }, "required": ["operation"] } },
+        { "name": "zuma_context", "description": "Store, query, compile, or plan workspace context and evidence.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["store_capsule", "query_capsule", "semantic_git_diff", "remember", "query", "compile", "plan_read"] }, "kind": { "type": "string" }, "content": { "type": "string" }, "sourcePath": { "type": "string" }, "workingDirectory": { "type": "string" }, "label": { "type": "string" }, "capsuleId": { "type": "string" }, "baseCapsuleId": { "type": "string" }, "query": { "type": "string" }, "key": { "type": "string" }, "value": { "type": "string" }, "evidence": { "type": "string" }, "goal": { "type": "string" }, "baseRef": { "type": "string" }, "path": { "type": "string" }, "onlyUnseen": { "type": "boolean" }, "onlyActive": { "type": "boolean" }, "includeEvidence": { "type": "boolean" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxResults": { "type": "integer" }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["operation", "workingDirectory"] } },
+        { "name": "zuma_gate", "description": "Inspect or change execution-loop protection.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["get", "set", "reset"] }, "mode": { "type": "string", "enum": ["manual", "incremental", "milestone"] }, "enabled": { "type": "boolean" }, "repeatFailureThreshold": { "type": "integer" }, "historySeconds": { "type": "integer" }, "skipRedPhase": { "type": "boolean" }, "workspaceKey": { "type": "string" } }, "required": ["operation"] } },
+        { "name": "zuma_handoff", "description": "Prepare a bounded chat handoff.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["prepare"] }, "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } }, "required": ["operation"] } }
+    ] })
+}
+
+#[allow(dead_code)]
+fn legacy_tool_definitions() -> Value {
+    json!({ "tools": [
+        { "name": "zuma_task", "description": "Manage the current task scope. Use operation set, get, or clear.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["set", "get", "clear"] }, "goal": { "type": "string" }, "target": { "type": "string" }, "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }, "outOfScope": { "type": "array", "items": { "type": "string" } }, "allowedPaths": { "type": "array", "items": { "type": "string" } }, "sessionId": { "type": "string" } }, "required": ["operation"] } },
+        { "name": "zuma_shell", "description": "Run or manage persistent PowerShell sessions. Use operation execute, reset_session, or list_sessions.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["execute", "reset_session", "list_sessions"] }, "script": { "type": "string" }, "timeoutSeconds": { "type": "integer" }, "workingDirectory": { "type": "string" }, "maxOutputChars": { "type": "integer" }, "sessionId": { "type": "string" }, "compactResponse": { "type": "boolean" } }, "required": ["operation"] } },
+        { "name": "zuma_execute", "description": "Run builds and static diagnostics. Use operation dotnet_build, dotnet_test, playwright, bun_test, pytest, vitest, tsc, eslint, cargo_check, or affected_tests.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["dotnet_build", "dotnet_test", "affected_tests", "playwright", "bun_test", "pytest", "vitest", "tsc", "eslint", "cargo_check"] }, "workingDirectory": { "type": "string" }, "testArgs": { "type": "array", "items": { "type": "string" } }, "tscArgs": { "type": "array", "items": { "type": "string" } }, "eslintArgs": { "type": "array", "items": { "type": "string" } }, "cargoArgs": { "type": "array", "items": { "type": "string" } }, "target": { "type": "string" }, "includeWarnings": { "type": "boolean" }, "onlyNew": { "type": "boolean" }, "regressionsOnly": { "type": "boolean" }, "timeoutSeconds": { "type": "integer" }, "contextLines": { "type": "integer" }, "compactResponse": { "type": "boolean" }, "pythonPath": { "type": "string" } }, "required": ["operation", "workingDirectory"] } },
+        { "name": "zuma_read", "description": "Search or read bounded source and log content. Use operation peek_file, read_section, read_symbol, summarize_log, search_files, or inspect_playwright_trace.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["peek_file", "read_section", "read_symbol", "summarize_log", "search_files", "inspect_playwright_trace"] }, "path": { "type": "string" }, "pattern": { "type": "string" }, "symbol": { "type": "string" }, "query": { "type": "string" }, "startLine": { "type": "integer" }, "endLine": { "type": "integer" }, "workingDirectory": { "type": "string" }, "tracePath": { "type": "string" }, "maxChars": { "type": "integer" }, "maxResults": { "type": "integer" }, "maxPerFile": { "type": "integer" }, "contextLines": { "type": "integer" }, "tailLines": { "type": "integer" }, "literal": { "type": "boolean" }, "exclude": { "type": "array", "items": { "type": "string" } }, "ranges": { "type": "array", "items": { "oneOf": [{ "type": "string" }, { "type": "object" }] } } }, "required": ["operation"] } },
+        { "name": "zuma_context", "description": "Store, query, compile, or plan workspace context and evidence. Use operation store_capsule, query_capsule, semantic_git_diff, remember, query, compile, or plan_read.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["store_capsule", "query_capsule", "semantic_git_diff", "remember", "query", "compile", "plan_read"] }, "kind": { "type": "string" }, "content": { "type": "string" }, "sourcePath": { "type": "string" }, "workingDirectory": { "type": "string" }, "label": { "type": "string" }, "capsuleId": { "type": "string" }, "baseCapsuleId": { "type": "string" }, "query": { "type": "string" }, "key": { "type": "string" }, "value": { "type": "string" }, "evidence": { "type": "string" }, "goal": { "type": "string" }, "baseRef": { "type": "string" }, "path": { "type": "string" }, "onlyUnseen": { "type": "boolean" }, "onlyActive": { "type": "boolean" }, "includeEvidence": { "type": "boolean" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxResults": { "type": "integer" }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["operation", "workingDirectory"] } },
+        { "name": "zuma_gate", "description": "Inspect or change execution-loop protection. Use operation get, set, or reset.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["get", "set", "reset"] }, "mode": { "type": "string", "enum": ["manual", "incremental", "milestone"] }, "enabled": { "type": "boolean" }, "repeatFailureThreshold": { "type": "integer" }, "historySeconds": { "type": "integer" }, "skipRedPhase": { "type": "boolean" }, "workspaceKey": { "type": "string" } }, "required": ["operation"] } },
+        { "name": "zuma_handoff", "description": "Prepare or continue a bounded chat handoff.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["prepare"] }, "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } }, "required": ["operation"] } },
         { "name": "set_task_anchor", "description": "Set the current chat target and scope. Call once at the start of a substantial task, and update it when the goal or scope changes. Zuma will append this anchor to later tool responses and warn when a path is outside allowedPaths.", "inputSchema": { "type": "object", "properties": { "goal": { "type": "string" }, "target": { "type": "string" }, "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }, "outOfScope": { "type": "array", "items": { "type": "string" } }, "allowedPaths": { "type": "array", "items": { "type": "string" } }, "sessionId": { "type": "string" } }, "required": ["goal", "target"] } },
         { "name": "get_task_anchor", "description": "Return the current target, acceptance criteria, scope, and allowed paths.", "inputSchema": { "type": "object", "properties": {} } },
         { "name": "clear_task_anchor", "description": "Clear the current task anchor. Use this when the task is complete or a new unrelated chat starts.", "inputSchema": { "type": "object", "properties": {} } },
@@ -621,14 +641,80 @@ fn rust_regex_supported(arguments: &Value, name: &str, default: Option<&str>) ->
     regex::RegexBuilder::new(&expression).build().is_ok()
 }
 
+fn routed_params(params: &Value) -> Option<(String, Value)> {
+    let name = params.get("name")?.as_str()?;
+    let arguments = params.get("arguments")?.as_object()?;
+    let operation = arguments.get("operation")?.as_str()?;
+
+    let routed_name = match name {
+        "zuma_task" => match operation {
+            "set" => "set_task_anchor",
+            "get" => "get_task_anchor",
+            "clear" => "clear_task_anchor",
+            _ => return None,
+        },
+        "zuma_shell" => match operation {
+            "execute" => "execute_powershell",
+            "reset_session" => "reset_powershell_session",
+            "list_sessions" => "list_powershell_sessions",
+            _ => return None,
+        },
+        "zuma_execute" => match operation {
+            "dotnet_build" => "run_dotnet_build",
+            "dotnet_test" => "run_dotnet_test",
+            "affected_tests" => "run_affected_tests",
+            "playwright" => "run_playwright",
+            "bun_test" => "run_bun_test",
+            "pytest" => "run_pytest",
+            "vitest" => "run_vitest",
+            "tsc" => "run_tsc",
+            "eslint" => "run_eslint",
+            "cargo_check" => "run_cargo_check",
+            _ => return None,
+        },
+        "zuma_read" => match operation {
+            "peek_file" | "read_section" | "read_symbol" | "summarize_log" | "search_files" | "inspect_playwright_trace" => operation,
+            _ => return None,
+        },
+        "zuma_context" => match operation {
+            "store_capsule" => "store_capsule",
+            "query_capsule" => "query_capsule",
+            "semantic_git_diff" => "semantic_git_diff",
+            "remember" => "remember_context",
+            "query" => "query_context",
+            "compile" => "compile_context",
+            "plan_read" => "plan_context_read",
+            _ => return None,
+        },
+        "zuma_gate" => match operation {
+            "get" => "get_execution_gate",
+            "set" => "set_execution_gate",
+            "reset" => "reset_execution_gate",
+            _ => return None,
+        },
+        "zuma_handoff" if operation == "prepare" => "prepare_handoff",
+        _ => return None,
+    };
+
+    let mut routed = arguments.clone();
+    routed.remove("operation");
+    Some((routed_name.to_string(), Value::Object(routed)))
+}
+
 fn call_tool(
     client_id: &Value,
     params: &Value,
     bridge: &Bridge,
     task_anchor: Option<&Value>,
 ) -> Value {
-    let arguments = params.get("arguments").unwrap_or(&Value::Null);
-    let name = match params.get("name").and_then(Value::as_str) {
+    let routed = routed_params(params);
+    let arguments = routed
+        .as_ref()
+        .map(|(_, routed_arguments)| routed_arguments)
+        .or_else(|| params.get("arguments"))
+        .unwrap_or(&Value::Null);
+    let routed_name = routed.as_ref().map(|(name, _)| name.as_str());
+    let name = match routed_name.or_else(|| params.get("name").and_then(Value::as_str)) {
         Some(name) => name,
         None => {
             return json!({ "content": [{ "type": "text", "text": "{\"status\":\"error\",\"message\":\"Tool name is required.\"}" }], "isError": true });
@@ -847,16 +933,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_definitions_include_evidence_capsules() {
+    fn tool_definitions_include_context_router() {
         let definitions = tool_definitions();
-        let names: Vec<&str> = definitions["tools"]
-            .as_array()
-            .unwrap()
+        let tools = definitions["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 7);
+        let context = tools
             .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
-        assert!(names.contains(&"store_capsule"));
-        assert!(names.contains(&"query_capsule"));
+            .find(|tool| tool["name"] == "zuma_context")
+            .expect("zuma_context router should be exposed");
+        let operations = context["inputSchema"]["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(operations.iter().any(|operation| operation == "store_capsule"));
+        assert!(operations.iter().any(|operation| operation == "query_capsule"));
     }
 
     #[test]

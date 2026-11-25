@@ -81,67 +81,40 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 33);
-    assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
+    assert_eq!(tools.len(), 7);
     for name in [
-        "set_task_anchor",
-        "get_task_anchor",
-        "clear_task_anchor",
-        "store_capsule",
-        "query_capsule",
-        "semantic_git_diff",
-        "remember_context",
-        "query_context",
-        "compile_context",
-        "plan_context_read",
+        "zuma_task",
+        "zuma_shell",
+        "zuma_execute",
+        "zuma_read",
+        "zuma_context",
+        "zuma_gate",
+        "zuma_handoff",
     ] {
-        assert!(
-            tools.iter().any(|tool| tool["name"] == name),
-            "missing {name}"
-        );
+        assert!(tools.iter().any(|tool| tool["name"] == name), "missing router {name}");
+    }
+    for name in [
+        "zuma_task",
+        "zuma_shell",
+        "zuma_execute",
+        "zuma_read",
+        "zuma_context",
+        "zuma_gate",
+        "zuma_handoff",
+    ] {
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["operation"]["type"], "string", "{name} must route by operation");
     }
     assert!(
-        tools
-            .iter()
-            .any(|tool| tool["name"] == "run_affected_tests")
+        tools.iter().all(|tool| !tool["name"].as_str().unwrap().starts_with("run_")),
+        "legacy run_* tools must be hidden behind zuma_execute"
     );
-    for name in [
-        "get_execution_gate",
-        "set_execution_gate",
-        "reset_execution_gate",
-    ] {
-        assert!(
-            tools.iter().any(|tool| tool["name"] == name),
-            "missing {name}"
-        );
-    }
-    assert!(tools.iter().any(|tool| tool["name"] == "run_cargo_check"));
-    assert!(tools.iter().any(|tool| tool["name"] == "read_symbol"));
-    for name in [
-        "run_dotnet_build",
-        "run_eslint",
-        "run_tsc",
-        "run_cargo_check",
-    ] {
-        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
-        assert_eq!(
-            tool["inputSchema"]["properties"]["onlyNew"]["type"],
-            "boolean"
-        );
-    }
-    for name in [
-        "run_dotnet_test",
-        "run_playwright",
-        "run_bun_test",
-        "run_pytest",
-        "run_vitest",
-    ] {
-        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
-        assert_eq!(
-            tool["inputSchema"]["properties"]["regressionsOnly"]["type"],
-            "boolean"
-        );
-    }
+    let execute = tools
+        .iter()
+        .find(|tool| tool["name"] == "zuma_execute")
+        .unwrap();
+    assert_eq!(execute["inputSchema"]["properties"]["operation"]["type"], "string");
+    assert_eq!(execute["inputSchema"]["properties"]["regressionsOnly"]["type"], "boolean");
     for tool in tools {
         for (name, schema) in tool["inputSchema"]["properties"].as_object().unwrap() {
             if schema["type"] == "array" {
@@ -384,7 +357,7 @@ fn prepares_a_bounded_handoff_from_a_synthetic_session() {
         serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
         serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }),
         serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }),
-        serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "prepare_handoff", "arguments": { "sessionPath": session.to_string_lossy(), "workingDirectory": root.to_string_lossy(), "nextActionHint": long_next_action, "maxChars": 1000 } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "zuma_handoff", "arguments": { "operation": "prepare", "sessionPath": session.to_string_lossy(), "workingDirectory": root.to_string_lossy(), "nextActionHint": long_next_action, "maxChars": 1000 } } }),
     ]);
 
     let tools = responses
@@ -393,7 +366,7 @@ fn prepares_a_bounded_handoff_from_a_synthetic_session() {
         .unwrap()["result"]["tools"]
         .as_array()
         .unwrap();
-    assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
+    assert!(tools.iter().any(|tool| tool["name"] == "zuma_handoff"));
     let payload = tool_payload(&responses, 3);
     assert_eq!(payload["status"], "success");
     assert!(

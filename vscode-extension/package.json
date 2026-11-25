@@ -2,7 +2,7 @@
   "name": "inazuma-pwsh",
   "displayName": "Zuma MCP - Copilot Chat Log & Context Optimizer",
   "description": "Stop Copilot from loading huge build and test logs. Get concise failures, targeted file reads, task anchors, and safe handoffs for AI coding.",
-  "version": "0.14.0",
+  "version": "1.0.0",
   "publisher": "ShunsukeF",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -107,11 +107,11 @@
   ],
   "scripts": {
     "test": "node test-extension.cjs",
-    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.13.0-win32-x64.vsix",
-    "package:linux-x64": "vsce package --target linux-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.13.0-linux-x64.vsix",
-    "package:linux-arm64": "vsce package --target linux-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.13.0-linux-arm64.vsix",
-    "package:darwin-x64": "vsce package --target darwin-x64 --no-dependencies --out ../artifacts/zuma-mcp-0.13.0-darwin-x64.vsix",
-    "package:darwin-arm64": "vsce package --target darwin-arm64 --no-dependencies --out ../artifacts/zuma-mcp-0.13.0-darwin-arm64.vsix"
+    "package": "vsce package --target win32-x64 --no-dependencies --out ../artifacts/zuma-mcp-1.0.0-win32-x64.vsix",
+    "package:linux-x64": "vsce package --target linux-x64 --no-dependencies --out ../artifacts/zuma-mcp-1.0.0-linux-x64.vsix",
+    "package:linux-arm64": "vsce package --target linux-arm64 --no-dependencies --out ../artifacts/zuma-mcp-1.0.0-linux-arm64.vsix",
+    "package:darwin-x64": "vsce package --target darwin-x64 --no-dependencies --out ../artifacts/zuma-mcp-1.0.0-darwin-x64.vsix",
+    "package:darwin-arm64": "vsce package --target darwin-arm64 --no-dependencies --out ../artifacts/zuma-mcp-1.0.0-darwin-arm64.vsix"
   },
   "devDependencies": {
     "@types/vscode": "1.101.0",
