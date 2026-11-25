@@ -41,9 +41,19 @@ fn read_lines(path: &Path) -> Result<Vec<String>, String> {
     Ok(text.lines().map(str::to_owned).collect())
 }
 
+pub fn path_problem(path: &Path, what: &str) -> String {
+    if !path.is_absolute() {
+        format!("Path must be absolute: {}", path.display())
+    } else if !path.exists() {
+        format!("Path does not exist: {}", path.display())
+    } else {
+        format!("Path is not an existing {what}: {}", path.display())
+    }
+}
+
 fn validate_file(path: &Path) -> Result<(), String> {
     if !path.is_absolute() || !path.is_file() {
-        return Err("Path must be an existing absolute file path.".to_string());
+        return Err(path_problem(path, "file"));
     }
     let bytes = fs::metadata(path).map_err(|error| error.to_string())?.len();
     if bytes > 50 * 1024 * 1024 {
@@ -437,7 +447,7 @@ pub fn search_files(arguments: &Value) -> Value {
     };
     let root = Path::new(path_text);
     if !root.is_absolute() || (!root.is_dir() && !root.is_file()) {
-        return json!({ "status": "error", "message": "Path must be an existing absolute directory or file path." });
+        return json!({ "status": "error", "message": path_problem(root, "directory or file") });
     }
     let pattern = match arguments.get("pattern").and_then(Value::as_str) {
         Some(pattern) => pattern,

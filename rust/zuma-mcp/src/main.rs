@@ -371,7 +371,7 @@ fn peek_file(arguments: &Value) -> Value {
     };
     let path = Path::new(path_text);
     if !path.is_absolute() || !path.is_file() {
-        return json!({ "status": "error", "message": "File must be an existing absolute path." });
+        return json!({ "status": "error", "message": file_tools::path_problem(path, "file") });
     }
 
     let lines = match read_lines(path) {
@@ -430,7 +430,7 @@ fn read_section(arguments: &Value) -> Value {
     };
     let path = Path::new(path_text);
     if !path.is_absolute() || !path.is_file() {
-        return json!({ "status": "error", "message": "File must be an existing absolute path." });
+        return json!({ "status": "error", "message": file_tools::path_problem(path, "file") });
     }
     let Some(start) = arguments
         .get("startLine")
@@ -544,6 +544,28 @@ fn legacy_tool_definitions() -> Value {
         { "name": "plan_context_read", "description": "Rank the smallest next file, symbol, or section read for a question.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "question": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["workingDirectory", "question"] } },
         { "name": "prepare_handoff", "description": "Prepare a bounded AI handoff from an explicitly selected VS Code chat session.", "inputSchema": { "type": "object", "properties": { "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } } } }
     ] })
+}
+
+fn missing_required_arguments(name: &str, arguments: &Value) -> Option<String> {
+    let definitions = tool_definitions();
+    let tool = definitions["tools"]
+        .as_array()?
+        .iter()
+        .find(|tool| tool["name"] == name)?;
+    let missing: Vec<&str> = tool["inputSchema"]["required"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|field| arguments.get(*field).is_none_or(Value::is_null))
+        .collect();
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Missing required argument(s) for {name}: {}.",
+            missing.join(", ")
+        ))
+    }
 }
 
 fn uses_task_protocol(params: &Value) -> bool {
@@ -720,6 +742,12 @@ fn call_tool(
             return json!({ "content": [{ "type": "text", "text": "{\"status\":\"error\",\"message\":\"Tool name is required.\"}" }], "isError": true });
         }
     };
+
+    if routed.is_some()
+        && let Some(message) = missing_required_arguments(name, arguments)
+    {
+        return json!({ "content": [{ "type": "text", "text": json!({ "status": "error", "message": message }).to_string() }], "isError": true });
+    }
 
     if name == "set_task_anchor" {
         return json!({ "content": [{ "type": "text", "text": bridge.task_anchors.set(arguments).to_string() }] });
