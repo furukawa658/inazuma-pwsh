@@ -19,7 +19,11 @@ public sealed class SemanticGitDiff
         maxChars = Math.Clamp(maxChars, 500, 20000);
 
         var changed = RunGit(workingDirectory, "diff", "--name-only", "--no-renames", baseRef, "--", path ?? ".");
-        if (changed.ExitCode != 0) return Error(changed.Error.Length > 0 ? changed.Error : "git diff failed.");
+        if (changed.ExitCode != 0)
+        {
+            var detail = changed.Error.Length > 0 ? changed.Error : "git diff failed.";
+            return Error($"{detail} Check that '{baseRef}' exists (a repository without commits has no HEAD; pass an existing baseRef).");
+        }
         var untracked = RunGit(workingDirectory, "ls-files", "--others", "--exclude-standard", "--", path ?? ".");
         if (untracked.ExitCode != 0) return Error(untracked.Error.Length > 0 ? untracked.Error : "git ls-files failed.");
 

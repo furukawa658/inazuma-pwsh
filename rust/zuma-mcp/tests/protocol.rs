@@ -217,13 +217,7 @@ fn reminds_each_tool_about_the_active_task_anchor() {
     assert_eq!(set["taskAnchor"]["target"], "Zuma task reminders");
     let reminder = tool_payload(&responses, 3);
     assert_eq!(reminder["taskAnchor"]["goal"], "Finish the anchor feature");
-    assert_eq!(
-        reminder["taskAnchor"]["scopeWarnings"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    assert!(reminder["taskAnchor"].get("scopeWarnings").is_none());
     assert_eq!(tool_payload(&responses, 4)["status"], "active");
     assert_eq!(tool_payload(&responses, 5)["status"], "cleared");
     assert!(tool_payload(&responses, 6).get("taskAnchor").is_none());
