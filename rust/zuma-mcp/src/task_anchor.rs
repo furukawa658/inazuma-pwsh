@@ -120,7 +120,7 @@ impl TaskAnchor {
     }
 
     fn scope_warnings(&self, tool: &str, arguments: &Value) -> Vec<String> {
-        if self.allowed_paths.is_empty() {
+        if self.allowed_paths.is_empty() || is_read_only_tool(tool) {
             return Vec::new();
         }
         let mut paths = Vec::new();
@@ -142,6 +142,14 @@ impl TaskAnchor {
             .map(|path| format!("Path is outside allowedPaths: {path}"))
             .collect()
     }
+}
+
+fn is_read_only_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "peek_file" | "read_section" | "read_symbol" | "summarize_log" | "search_files"
+            | "inspect_playwright_trace" | "semantic_git_diff" | "query_context" | "query_capsule"
+    )
 }
 
 fn parse_anchor(arguments: &Value) -> Result<TaskAnchor, String> {
@@ -321,7 +329,7 @@ mod tests {
         let mut result = json!({
             "content": [{ "type": "text", "text": "{\"status\":\"success\"}" }]
         });
-        store.decorate("peek_file", &arguments, &mut result);
+        store.decorate("run_eslint", &arguments, &mut result);
         let payload: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(payload["taskAnchor"]["target"], "Issue 114");
@@ -370,7 +378,7 @@ mod tests {
         assert_eq!(store.set(&value)["status"], "set");
         let reminder = store
             .snapshot(
-                "peek_file",
+                "run_eslint",
                 &json!({ "path": format!(r"C:\Other\{}", "x".repeat(2_000)) }),
             )
             .unwrap();
