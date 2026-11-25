@@ -379,6 +379,7 @@ fn peek_file(arguments: &Value) -> Value {
         Err(message) => return json!({ "status": "error", "message": message }),
     };
     let kind = determine_kind(path);
+    let file_bytes = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
     let mut entries = if kind == "markdown" {
         markdown_outline(&lines)
     } else if kind == "code" {
@@ -416,8 +417,8 @@ fn peek_file(arguments: &Value) -> Value {
         "kind": kind,
         "encoding": "utf-8",
         "lines": lines.len(),
-        "bytes": fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0),
-        "recommend": if lines.len() <= integer_argument(arguments, "fullThreshold", 200).clamp(1, 5000) { "FULL" } else { "PARTIAL" },
+        "bytes": file_bytes,
+        "recommend": if lines.len() <= integer_argument(arguments, "fullThreshold", 200).clamp(1, 5000) && file_bytes <= 20_000 { "FULL" } else { "PARTIAL" },
         "entries": rendered,
         "entriesTruncated": entries_truncated
     })
@@ -544,6 +545,16 @@ fn legacy_tool_definitions() -> Value {
         { "name": "plan_context_read", "description": "Rank the smallest next file, symbol, or section read for a question.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "question": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["workingDirectory", "question"] } },
         { "name": "prepare_handoff", "description": "Prepare a bounded AI handoff from an explicitly selected VS Code chat session.", "inputSchema": { "type": "object", "properties": { "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } } } }
     ] })
+}
+
+fn visible_tool_definitions() -> Value {
+    let mut definitions = tool_definitions();
+    if !handoff::enabled()
+        && let Some(tools) = definitions["tools"].as_array_mut()
+    {
+        tools.retain(|tool| !matches!(tool["name"].as_str(), Some("zuma_handoff" | "prepare_handoff")));
+    }
+    definitions
 }
 
 fn missing_required_arguments(name: &str, arguments: &Value) -> Option<String> {
@@ -853,7 +864,7 @@ fn handle_request(request: Request, bridge: &Bridge, task_anchor: Option<&Value>
             "instructions": "At the start of a substantial task, call set_task_anchor with the goal, target, acceptance criteria, out-of-scope items, and absolute allowed paths. Keep it updated when scope changes and clear it only when the task is complete."
         }),
         "ping" => json!({}),
-        "tools/list" => tool_definitions(),
+        "tools/list" => visible_tool_definitions(),
         "tools/call" => call_tool(&id, &request.params, bridge, task_anchor),
         _ => {
             return Some(json!({

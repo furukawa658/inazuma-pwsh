@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_MAX_CHARS: usize = 6000;
 const MAX_INPUT_BYTES: u64 = 50 * 1024 * 1024;
 
-fn enabled() -> bool {
+pub fn enabled() -> bool {
     env::var("ZUMA_HANDOFF_ENABLED")
         .ok()
         .is_some_and(|value| value.eq_ignore_ascii_case("true"))

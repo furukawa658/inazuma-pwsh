@@ -281,7 +281,7 @@ pub fn summarize_log(arguments: &Value) -> Value {
     let mut matched_lines = 0;
 
     for (index, line) in lines.iter().enumerate() {
-        let clean = ansi_regex.replace_all(line, "").trim().to_string();
+        let clean = normalize_jsonl(ansi_regex.replace_all(line, "").trim());
         let searchable = if pattern == DEFAULT_LOG_PATTERN {
             zero_regex.replace_all(&clean, "").to_string()
         } else {
@@ -388,6 +388,28 @@ pub fn summarize_log(arguments: &Value) -> Value {
             &[],
             truncated,
         );
+    }
+}
+
+// JSONL行は「[level] message」へ畳み、件数集計とパターン照合を行単位の文字列で行えるようにする。
+fn normalize_jsonl(line: &str) -> String {
+    if !line.starts_with('{') {
+        return line.to_string();
+    }
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(line) else {
+        return line.to_string();
+    };
+    let field = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| object.get(*name).and_then(Value::as_str))
+    };
+    let Some(message) = field(&["message", "msg", "error", "text"]) else {
+        return line.to_string();
+    };
+    match field(&["level", "severity", "status"]) {
+        Some(level) => format!("[{level}] {message}"),
+        None => message.to_string(),
     }
 }
 
@@ -867,4 +889,19 @@ fn git_ignored_files(base: &Path, files: &[PathBuf]) -> Result<HashSet<PathBuf>,
                 .join(String::from_utf8_lossy(entry).replace('/', std::path::MAIN_SEPARATOR_STR))
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_jsonl;
+
+    #[test]
+    fn collapses_jsonl_to_level_and_message() {
+        assert_eq!(
+            normalize_jsonl(r#"{"level":"error","message":"boom","ts":1}"#),
+            "[error] boom"
+        );
+        assert_eq!(normalize_jsonl("plain line"), "plain line");
+        assert_eq!(normalize_jsonl(r#"{"a":1}"#), r#"{"a":1}"#);
+    }
 }
