@@ -1,6 +1,18 @@
 <p align="center"><img src="vscode-extension/media/icon.png" alt="Zuma MCP icon" width="128"></p>
 
-# Zuma MCP: Context & Log Optimizer for AI Coding
+# Zuma MCP - Copilot Chat Log & Context Optimizer
+
+Stop Copilot and other AI coding agents from reading thousands of raw build, test, and document lines. Zuma returns the first useful failures, exact sections, and a bounded handoff instead of filling the chat with whole logs.
+
+## Start in VS Code
+
+1. Install [Zuma MCP from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ShunsukeF.inazuma-pwsh).
+2. Trust the workspace, start the MCP server, and approve its tools.
+3. Ask Copilot Chat: `Use Zuma MCP to run my tests and show only the new failures.`
+
+No manual `mcp.json` entry is required. The extension installs the platform binary, MCP provider, and PowerShell worker.
+
+## Measured examples
 
 **Your coding agent reads 7% of a design document and 1% of a build log—not 100%.**
 

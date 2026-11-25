@@ -104,15 +104,15 @@ async function main() {
     assert.ok(fs.statSync(definition.command).size > 0);
     assert.ok(fs.statSync(path.join(__dirname, manifest.icon)).size > 0);
     assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
-    assert.equal(manifest.version, '0.12.0');
-    assert.equal(manifest.displayName, 'Zuma MCP: Context & Log Optimizer for AI Coding');
+    assert.equal(manifest.version, '0.12.1');
+    assert.equal(manifest.displayName, 'Zuma MCP - Copilot Chat Log & Context Optimizer');
     assert.equal(manifest.publisher, 'ShunsukeF');
     assert.equal(manifest.repository?.url, 'https://github.com/furukawa658/inazuma-pwsh.git');
     assert.equal(manifest.bugs?.url, 'https://github.com/furukawa658/inazuma-pwsh/issues');
     assert.equal(manifest.homepage, 'https://github.com/furukawa658/inazuma-pwsh#readme');
     assert.ok(manifest.files.includes('THIRD-PARTY-NOTICES.txt'));
     assert.ok(fs.statSync(path.join(__dirname, 'THIRD-PARTY-NOTICES.txt')).size > 0);
-    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.12.0-win32-x64.vsix'));
+    assert.ok(manifest.scripts.package.includes('zuma-mcp-0.12.1-win32-x64.vsix'));
     assert.ok(!manifest.scripts.package.includes('TEST-ONLY'));
 
     // Platform mapping

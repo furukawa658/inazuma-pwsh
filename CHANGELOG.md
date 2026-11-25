@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.1
+
+- Lead the Marketplace title and description with the Copilot Chat problem Zuma solves, and make log compression, focused reads, task anchors, and handoffs visible immediately.
+- Reorder the README around the value proposition, a short installation path, and measured examples before the full tool reference.
+
 ## 0.12.0
 
 - Add `set_task_anchor`, `get_task_anchor`, and `clear_task_anchor` to keep the current goal, target, acceptance criteria, scope exclusions, and allowed paths visible during long chats.
