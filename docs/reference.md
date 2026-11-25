@@ -96,6 +96,16 @@ Capsule IDs derive from kind and content. Saving identical evidence returns the 
 
 Capsules are plaintext and use the current user's filesystem permissions. A body matching a credential-like assignment, bearer token, or URL query returns `status: "sensitive"` with an empty `matches` array instead of source content. Do not store content that must not remain on the local machine; Zuma does not encrypt capsule files.
 
+## Context engine
+
+`semantic_git_diff` compares the current worktree with `baseRef` and returns declaration-level `added`, `removed`, and `modified` entries for tracked and untracked files. It reads at most 200 changed paths, skips source files above 2 MB, and bounds the response by `maxChanges` and `maxChars`. No raw diff body is returned.
+
+`remember_context` stores a compact `fact`, `decision`, `unknown`, `next-action`, or `invalidated` record under a stable key. `query_context` searches keys, values, and evidence references, with active-state and kind filters. Reusing the same kind and key deactivates the older record. An `invalidated` record deactivates older records with that key. Keys are limited to 200 characters and values to 12,000 characters.
+
+Context records are workspace-scoped JSONL files under `%TEMP%/inazuma-pwsh-context` unless `ZUMA_CONTEXT_DIRECTORY` is set. The workspace path is represented by a SHA-256-derived filename. Records are local plaintext, and credential-like assignments, bearer tokens, and URL queries are replaced with `[REDACTED]` before storage. Context is not uploaded and no model is called.
+
+`compile_context` groups active records as `Goal`, `Facts`, `Decisions`, `Unknowns`, `NextAction`, `Invalidated`, and evidence references. Its output is capped by `maxChars`. `plan_context_read` ranks changed files, outline symbols, question terms, and relative source dependencies, then recommends the smallest `read_symbol` or `read_section` operation. Candidate files above 2 MB and common generated directories are skipped.
+
 ## Safety and logs
 
 Scripts run with the current user's permissions. Zuma MCP is not a security sandbox, and syntax checks do not restrict unauthorized system operations. Connect only trusted local clients, and do not put credentials in scripts. Avoid interactive commands, GUI prompts, authentication prompts, and elevation requests.

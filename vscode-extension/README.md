@@ -39,11 +39,11 @@ Zuma MCP (formerly InazumaPwsh) gives your VS Code coding agent a native Rust fi
 
 ## Measured context reduction
 
-On a 137,000-character log, Zuma returned a `store_capsule` response of 0.318% of the source size and a Delta Context response of 0.125% after the log grew by one line. The same integration suite passed all 79 MCP checks; Rust passed 10 unit and 6 protocol tests; the packaged Windows smoke test exposed all 28 tools and passed parallel execution, cancellation, build, handoff, and parent-lifetime checks.
+On a 137,000-character log, Zuma returned a `store_capsule` response of 0.318% of the source size and a Delta Context response of 0.125% after the log grew by one line. The 0.14 Context Engine adds declaration-level diffs, persistent structured facts, bounded compilation, and question-first read planning. The packaged smoke test exposes all 33 tools and checks capsule budgets, context storage, compilation, parallel execution, cancellation, build, handoff, and parent lifetime.
 
 These figures measure serialized MCP response characters against source characters. They are reproducible response-budget checks, not whole-chat token or billing measurements. The packaged real-smoke test, which CI runs on Windows, Linux, and macOS, fails if the initial response reaches 5% of the source or the delta response reaches 1%.
 
-## Available Tools (28 Tools)
+## Available Tools (33 Tools)
 
 ### Task anchor
 
@@ -110,6 +110,18 @@ Exact repeated `peek_file`, `read_section`, `read_symbol`, and `summarize_log` c
 
 Prefer `sourcePath` over `content` so large evidence does not enter the chat request. Capsules are local temporary plaintext, deduplicated by content hash, and limited to 20 MB each, 100 capsules, 200 MB total, and three days. Potential credentials or sensitive URLs block content from `query_capsule`; the local capsule remains available to the operating-system user. `ZUMA_CAPSULE_DIRECTORY` can override the default `%TEMP%/inazuma-pwsh-capsules` location.
 
+### Context engine
+
+| Tool | Purpose |
+| --- | --- |
+| `semantic_git_diff` | Compare a worktree with a Git revision and return declaration-level additions, removals, and modifications instead of a raw text diff. |
+| `remember_context` | Persist a fact, decision, unknown, next action, or invalidation marker under a stable key. |
+| `query_context` | Search active structured records for one workspace without replaying prior source text. |
+| `compile_context` | Compile the current Goal, Facts, Decisions, Unknowns, NextAction, Invalidated records, and evidence references under a character budget. |
+| `plan_context_read` | Rank changed files, symbols, sections, and relative dependencies to propose the smallest next read for a question. |
+
+Context records are local plaintext JSONL files separated by workspace hash under `%TEMP%/inazuma-pwsh-context`. Reusing a kind and key deactivates the older value; an `invalidated` record removes an old key from active queries. Secret-like values are redacted before storage. `ZUMA_CONTEXT_DIRECTORY` overrides the directory. No cloud service or model is called.
+
 ### Chat handoff
 
 | Tool | Purpose |
@@ -144,81 +156,25 @@ After installing the extension and approving its MCP tools, ask your agent to us
 
 The agent must choose and reuse a unique `sessionId` to keep chat state separate. Trace inspection complements browser-based visual checks; it does not verify how a page looks.
 
-## What's new in 0.12.0
+## What's new in 0.14.0
 
-- **Task anchors.** Register the goal, target, acceptance criteria, out-of-scope items, and allowed paths once with `set_task_anchor`; later tool responses repeat the anchor so long chats retain the intended scope.
-- **Scope drift warnings.** File, trace, Python, and working-directory arguments outside `allowedPaths` add `scopeWarnings` to the reminder.
-- **Synchronous and asynchronous coverage.** Anchors are attached to normal tool responses and MCP task creation or polling results, with bounded local state that is never persisted to chat logs.
+- **Context Compiler.** `remember_context`, `query_context`, and `compile_context` keep facts, decisions, unknowns, next actions, evidence references, and invalidations as bounded local state.
+- **Query-first Planner.** `plan_context_read` ranks changed files, outline symbols, source terms, and relative dependencies, then recommends the smallest `read_symbol` or `read_section` call.
+- **Semantic Git Diff.** `semantic_git_diff` compares tracked and untracked worktree content at declaration level and returns additions, removals, and modifications without replaying a raw diff.
+- **33-tool contract.** C# and Rust expose the same context tools, with packaged smoke coverage and workspace-scoped local JSONL storage.
 
-## What's new in 0.11.0
+## What's new in 0.13.0
 
-- **Safe chat handoff.** `prepare_handoff` lists candidate VS Code chat sessions, requires explicit selection, replays the current JSONL delta format, and returns a bounded local summary with Git state, the latest Zuma verification, and the next action.
-- **Opt-in privacy controls.** Handoff is disabled by default. It redacts credential-like values and URL query strings, rejects unsupported or oversized logs, and records byte savings without uploading or persisting chat text.
-- **Marketplace clarity.** The listing title now says what Zuma does: `Zuma MCP: Context & Log Optimizer for AI Coding`.
+- **Evidence Capsule + Delta Context.** Save large files and logs locally, then return a compact ID, targeted lines, regular-expression matches, or appended-only content.
+- **Redundant Read Guard.** Repeated file outlines, section reads, symbol reads, and log summaries return a compact duplicate marker while the source is unchanged.
+- **Response budgets in CI.** Packaged checks enforce a 5% initial capsule response and a 1% delta response against a 137,000-character source.
 
-## What's new in 0.10.0
+## What's new in 0.12.1
 
-- **Execution-loop circuit breaker.** The same normalized command, Git diff, and structured failure signature can be recorded across typed diagnostics and persistent PowerShell test commands. At the configured threshold, the next execution is blocked until the diff changes or the gate is reset.
-- **Incremental and milestone test modes.** `incremental` blocks unscoped full test runs and points agents to `run_affected_tests` or a specific target. `milestone` allows full regressions. The default `manual` mode preserves existing test scope behavior.
-- **VS Code controls.** Configure gate policy in `inazumaPwsh.executionGuard.*`, change mode from the Zuma status bar, and use **Zuma MCP: Reset Execution Gate** to start a fresh failure history.
-- **Optional Red-phase guard.** Set `inazumaPwsh.executionGuard.skipRedPhase` to block test execution while only test files changed. It is disabled by default to avoid rejecting legitimate reproduction or test-infrastructure work.
+- **Marketplace clarity.** The listing now leads with log compression, focused file reads, task anchors, and handoff rather than implementation details.
+- **Shorter onboarding.** The README starts with installation, measured examples, and the tools needed for the primary workflow.
 
-## What's new in 0.9.0
-
-- Every packaged platform starts the Rust front end. UTF-8 code outlines, Git-aware search, and log summaries run locally, while the C# compatibility core retains PowerShell, diagnostics, symbol reads, and non-UTF-8 fallback.
-- Long-running PowerShell, build, test, lint, and type-check calls can return MCP Tasks for polling and cancellation. Clients without Tasks opt-in keep synchronous responses.
-- `read_symbol` reads exact declarations and resolves overloads with `occurrence`. Test and diagnostic tools add affected-test selection, new-diagnostic filtering, regression-only reports, Rust checks, and bounded failure reports. The first failure keeps its full assertion message and stack; later failures use compact summaries, while the full report remains available separately.
-
-## What's new in 0.8.2
-
-This patch fixes the Windows Rust MCP front end so `read_section.ranges` declares its array item schema and VS Code can validate all registered tools.
-
-## 0.8.1
-
-This patch fixes Linux and macOS packaging so all platform variants can be published consistently.
-
-## 0.8.0
-
-On Windows x64, the Marketplace package starts a 0.5 MiB Rust MCP front end. UTF-8 Markdown outlines and explicit line ranges run locally in Rust. The existing .NET server is included as a compatibility process and starts on demand for persistent PowerShell, diagnostics, search, encoding fallback, and other tool paths. All 16 tool names and responses remain available. The other four platform packages continue to use the .NET server in 0.8.0.
-
-## What's new in 0.7.0
-
-This release changes response formats to reduce repeated output:
-
-- `peek_file.entries` now contains `"start-end level title"` strings instead of objects with `start`, `end`, `level`, and `title`.
-- `summarize_log` keeps each matched line as `text` at `firstLine`, without repeating it in `context`.
-- `codeContext` skips lines already returned for an earlier item in the same file, keeping each item's own line. `run_tsc` omits raw compiler lines from `output` when `diagnostics` already contains their full message.
-
-## What's new in 0.6.x
-
-### 0.6.1
-
-- The MCP server is shown as `Zuma` in VS Code.
-- PowerShell outlines use PowerShell's parser without executing the file. Markdown outlines respect the length of fenced code blocks. PowerShell outline queries start a separate PowerShell process and may take longer.
-
-### 0.6.0
-
-#### See how much you save
-
-![Savings in the status bar: peek_file 93%, read_section 89%, summarize_log 97%, 95% in total](media/savings.gif)
-
-The status bar now shows what Zuma MCP saved, for example `95% saved`. Click it, or run **Zuma MCP: Show Savings**, for the breakdown by tool: number of calls, bytes read, and bytes returned.
-
-- The status bar shows recorded calls and the savings measured for diagnostic tools, `peek_file`, `read_section`, and `summarize_log`. The records are stored in `%TEMP%/inazuma-pwsh-logs/usage.jsonl`.
-- Calls without a comparable source size, including `execute_powershell` and `search_files`, are counted but excluded from the savings percentage. The percentage is not a token count or a whole-chat measurement.
-- The numbers in the animation were measured with 0.6.0 on this repository: a 44 KB C# file (`peek_file`, `read_section`) and a 170 KB build log (`summarize_log`). The animation is an illustration, not a screen recording.
-
-#### New tools and options
-
-- **`run_dotnet_test`.** Runs `dotnet test` and returns test counts and failures with file, line, message, and stack from its TRX reports. VSTest is verified with a mock project; the Microsoft.Testing.Platform path (selected by `global.json`) has not been run against a real project.
-- **`run_eslint`.** Runs the locally installed ESLint and returns error and warning counts, per-rule counts, and the first 15 problems.
-- **`search_files`.** Searches text files under a directory with a regex and returns per-file match counts and the first matching lines in at most 8,000 characters. It skips `.git`, `node_modules`, `.venv`, binary files, and files over 5 MB, and respects Git ignore rules.
-- **`contextLines` for `run_dotnet_build`.** Compiler errors can carry `codeContext` like the test tools. `codeContext` is added only for files under `workingDirectory`.
-- **`rerunArgs`.** Failed test runs return arguments that rerun only the failures: failing files for `run_bun_test` and `run_vitest`, `--lf` for `run_pytest`, `--last-failed` for `run_playwright`, and a `--filter` expression for `run_dotnet_test` (VSTest). It is omitted when the report does not list every failure.
-- **Same-cause failures are grouped.** `run_bun_test`, `run_pytest`, `run_vitest`, and `run_dotnet_test` report failures at the same file and line with the same message once, with `count`.
-- **`run_tsc` additions.** `onlyNew: true` lists only diagnostics that the previous run with the same `workingDirectory` and `tscArgs` did not have, with `newCount` and `fixedCount`; the previous result is kept in memory until the server stops. `--build` and `-b` are accepted and omit `--noEmit`.
-
-Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/v0.11.0/CHANGELOG.md).
+Release notes for all versions are in [CHANGELOG.md](https://github.com/furukawa658/inazuma-pwsh/blob/main/CHANGELOG.md).
 
 ## Requirements and installation
 

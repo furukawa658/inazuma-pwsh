@@ -2,7 +2,7 @@
   "name": "inazuma-pwsh",
   "displayName": "Zuma MCP - Copilot Chat Log & Context Optimizer",
   "description": "Stop Copilot from loading huge build and test logs. Get concise failures, targeted file reads, task anchors, and safe handoffs for AI coding.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "publisher": "ShunsukeF",
   "icon": "media/icon.png",
   "license": "MIT",

@@ -15,6 +15,7 @@ const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostR
   process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
 const verificationHistoryPath = path.join(tmpdir(), `zuma-real-verification-${process.pid}.jsonl`);
 const capsuleDirectory = path.join(tmpdir(), `zuma-real-capsules-${process.pid}`);
+const contextDirectory = path.join(tmpdir(), `zuma-real-context-${process.pid}`);
 
 const child = spawn(executable, [], {
   cwd: root,
@@ -24,7 +25,8 @@ const child = spawn(executable, [], {
     ZUMA_WORKSPACE_ROOT: root,
     ZUMA_HANDOFF_ENABLED: 'true',
     ZUMA_VERIFICATION_HISTORY_PATH: verificationHistoryPath,
-    ZUMA_CAPSULE_DIRECTORY: capsuleDirectory
+    ZUMA_CAPSULE_DIRECTORY: capsuleDirectory,
+    ZUMA_CONTEXT_DIRECTORY: contextDirectory
   }
 });
 const pending = new Map();
@@ -165,9 +167,9 @@ try {
   send('notifications/initialized', {});
 
   const tools = await request('tools/list', {}).response;
-  assert.equal(tools.result.tools.length, 28);
+  assert.equal(tools.result.tools.length, 33);
   assert.ok(tools.result.tools.some(tool => tool.name === 'execute_powershell'));
-  for (const name of ['set_task_anchor', 'get_task_anchor', 'clear_task_anchor', 'store_capsule', 'query_capsule'])
+  for (const name of ['set_task_anchor', 'get_task_anchor', 'clear_task_anchor', 'store_capsule', 'query_capsule', 'semantic_git_diff', 'remember_context', 'query_context', 'compile_context', 'plan_context_read'])
     assert.ok(tools.result.tools.some(tool => tool.name === name), `missing ${name}`);
   assert.ok(tools.result.tools.some(tool => tool.name === 'prepare_handoff'));
   assert.ok(tools.result.tools.some(tool => tool.name === 'run_affected_tests'));
@@ -212,6 +214,27 @@ try {
   assert.deepEqual(deltaCapsule.matches.map(match => match.text), ['delta']);
   assert.ok(deltaResponseChars < 137000 * 0.01, `delta response used ${deltaResponseChars} characters`);
   console.log(`PACKAGED_CAPSULE_RATIO ${((storeResponseChars / 137000) * 100).toFixed(3)}% DELTA_RATIO ${((deltaResponseChars / 137000) * 100).toFixed(3)}%`);
+  const remembered = await callTool('remember_context', {
+    workingDirectory: budgetFixture,
+    kind: 'decision',
+    key: 'response-budget',
+    value: 'Capsule and delta responses stay below their CI budgets',
+    evidence: updatedCapsule.capsuleId
+  });
+  assert.equal(remembered.status, 'success');
+  const compiled = await callTool('compile_context', {
+    workingDirectory: budgetFixture,
+    goal: 'Verify packaged response budgets',
+    maxChars: 1000
+  });
+  assert.ok(compiled.text.includes('response-budget'));
+  const plan = await callTool('plan_context_read', {
+    workingDirectory: budgetFixture,
+    question: 'Where is the appended delta?',
+    paths: ['large.log'],
+    maxChars: 1000
+  });
+  assert.equal(plan.status, 'success');
   await rm(budgetFixture, { recursive: true, force: true });
 
   const anchor = await callTool('set_task_anchor', {
@@ -336,12 +359,13 @@ try {
   const cleared = await callTool('clear_task_anchor', {});
   assert.equal(cleared.status, 'cleared');
   await rm(buildProject, { recursive: true, force: true });
-  console.log('REAL_SMOKE_OK tools=28 anchor=true parallel=true cancellation=true dotnet_build=success handoff=success');
+  console.log('REAL_SMOKE_OK tools=33 anchor=true context_engine=true parallel=true cancellation=true dotnet_build=success handoff=success');
 } finally {
   child.stdin.end();
   child.kill();
   await rm(verificationHistoryPath, { force: true });
   await rm(capsuleDirectory, { recursive: true, force: true });
+  await rm(contextDirectory, { recursive: true, force: true });
 }
 
 const parent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });

@@ -81,7 +81,7 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 28);
+    assert_eq!(tools.len(), 33);
     assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
     for name in [
         "set_task_anchor",
@@ -89,6 +89,11 @@ fn array_tool_parameters_define_items() {
         "clear_task_anchor",
         "store_capsule",
         "query_capsule",
+        "semantic_git_diff",
+        "remember_context",
+        "query_context",
+        "compile_context",
+        "plan_context_read",
     ] {
         assert!(
             tools.iter().any(|tool| tool["name"] == name),

@@ -14,9 +14,10 @@ const hostRid = process.platform === 'win32' ? 'win-x64'
   : (process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64');
 const executable = process.argv[2] ?? path.join(root, 'bin/Debug/net10.0', hostRid, process.platform === 'win32' ? 'InazumaPwsh.exe' : 'InazumaPwsh');
 const capsuleDirectory = path.join(tmpdir(), `inazuma-test-capsules-${process.pid}-${Date.now()}`);
+const contextDirectory = path.join(tmpdir(), `inazuma-test-context-${process.pid}-${Date.now()}`);
 const spawnStartedAt = performance.now();
 const server = spawn(executable, process.argv.slice(3), {
-    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '', ZUMA_WORKSPACE_ROOT: root, ZUMA_CAPSULE_DIRECTORY: capsuleDirectory }
+    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PSModulePath: '', ZUMA_WORKSPACE_ROOT: root, ZUMA_CAPSULE_DIRECTORY: capsuleDirectory, ZUMA_CONTEXT_DIRECTORY: contextDirectory }
 });
 const pending = new Map();
 let nextId = 0;
@@ -109,9 +110,73 @@ try {
     assert.ok(execute);
     assert.equal(execute.inputSchema.properties.cancellationToken, undefined);
     assert.ok(listed.result.tools.some(tool => tool.name === 'read_symbol'));
-    for (const name of ['get_execution_gate', 'set_execution_gate', 'reset_execution_gate', 'store_capsule', 'query_capsule'])
+    for (const name of ['get_execution_gate', 'set_execution_gate', 'reset_execution_gate', 'store_capsule', 'query_capsule', 'semantic_git_diff', 'remember_context', 'query_context', 'compile_context', 'plan_context_read'])
         assert.ok(listed.result.tools.some(tool => tool.name === name), `missing ${name}`);
     await tool('set_execution_gate', { mode: 'manual', enabled: false });
+    await check('context engine compiles facts and read plans', async () => {
+        const project = path.join(fixture, 'context-engine');
+        await mkdir(project, { recursive: true });
+        assert.equal(spawnSync('git', ['init', '-q', project]).status, 0);
+        spawnSync('git', ['-C', project, 'config', 'user.email', 'zuma@example.invalid']);
+        spawnSync('git', ['-C', project, 'config', 'user.name', 'Zuma Test']);
+        const sourcePath = path.join(project, 'Service.cs');
+        await writeFile(sourcePath, 'public class Service\n{\n    public int OldName(int value) => value;\n}\n');
+        assert.equal(spawnSync('git', ['-C', project, 'add', '.']).status, 0);
+        assert.equal(spawnSync('git', ['-C', project, 'commit', '-qm', 'base']).status, 0);
+        await writeFile(sourcePath, 'public class Service\n{\n    public long NewName(int value) => value;\n}\n');
+
+        const diff = await tool('semantic_git_diff', { workingDirectory: project, baseRef: 'HEAD', maxChanges: 20, maxChars: 4000 });
+        assert.equal(diff.status, 'success', JSON.stringify(diff));
+        assert.ok(diff.changes.some(change => change.kind === 'added' && change.symbol === 'NewName'));
+        assert.ok(diff.changes.some(change => change.kind === 'removed' && change.symbol === 'OldName'));
+        assert.ok(diff.changes.some(change => change.kind === 'modified' && change.symbol === 'Service'));
+        const invalidRevision = await tool('semantic_git_diff', { workingDirectory: project, baseRef: '--output=unexpected.diff', maxChanges: 20, maxChars: 4000 });
+        assert.equal(invalidRevision.status, 'error');
+        const spacedRevision = await tool('semantic_git_diff', { workingDirectory: project, baseRef: 'HEAD -- Service.cs', maxChanges: 20, maxChars: 4000 });
+        assert.equal(spacedRevision.status, 'error');
+        await assert.rejects(lstat(path.join(project, 'unexpected.diff')));
+
+        const decision = await tool('remember_context', {
+            workingDirectory: project,
+            kind: 'decision',
+            key: 'service-name',
+            value: 'Return type is long and operation is named NewName',
+            evidence: 'Service.cs'
+        });
+        assert.equal(decision.status, 'success');
+        const burst = await Promise.all(Array.from({ length: 32 }, (_, index) => tool('remember_context', {
+            workingDirectory: project,
+            kind: 'fact',
+            key: `burst-${index}`,
+            value: `Burst record ${index}`
+        })));
+        assert.equal(new Set(burst.map(record => record.factId)).size, burst.length);
+        await tool('remember_context', {
+            workingDirectory: project,
+            kind: 'unknown',
+            key: 'old-callers',
+            value: 'Caller migration remains to be verified'
+        });
+        const facts = await tool('query_context', { workingDirectory: project, query: 'Service', kinds: ['decision', 'unknown'], maxResults: 10, maxChars: 2000 });
+        assert.ok(facts.matches.some(item => item.key === 'service-name'));
+        assert.ok(facts.matches.length >= 1);
+
+        const plan = await tool('plan_context_read', { workingDirectory: project, question: 'Which caller depends on NewName?', paths: ['Service.cs'], maxChars: 3000 });
+        assert.equal(plan.status, 'success');
+        assert.ok(plan.recommendations.length >= 1);
+        assert.equal(plan.recommendations[0].path, 'Service.cs');
+        assert.ok(plan.recommendations[0].symbols.includes('NewName'));
+
+        const compiled = await tool('compile_context', { workingDirectory: project, goal: 'Migrate Service callers to NewName', maxChars: 2500, includeEvidence: true });
+        assert.equal(compiled.status, 'success');
+        assert.ok(compiled.text.includes('Goal'));
+        assert.ok(compiled.text.includes('NewName'));
+        assert.ok(compiled.text.length <= 2500);
+
+        await tool('remember_context', { workingDirectory: project, kind: 'invalidated', key: 'old-callers', value: 'Caller migration now confirmed' });
+        const active = await tool('query_context', { workingDirectory: project, query: 'caller', onlyActive: true, maxResults: 10, maxChars: 2000 });
+        assert.ok(!active.matches.some(item => item.key === 'old-callers' && item.kind === 'unknown'));
+    });
     await check('evidence capsules return only unseen context', async () => {
         const sourcePath = path.join(fixture, 'capsule.log');
         await writeFile(sourcePath, ['alpha', 'beta', 'gamma'].join('\n'));
@@ -2072,5 +2137,6 @@ process.exitCode = 1;
     }
     await rm(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     await rm(capsuleDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    await rm(contextDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
 

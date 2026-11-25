@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.0
+
+- Add `semantic_git_diff` to replace raw Git output with declaration-level additions, removals, and modifications for changed and untracked files.
+- Add the local Context Engine with `remember_context`, `query_context`, and `compile_context`. Workspace-scoped facts, decisions, unknowns, next actions, evidence references, and invalidations persist as bounded local JSONL while secret-like values are redacted.
+- Add `plan_context_read` for query-first, progressive disclosure. It ranks changed files, outline symbols, question terms, and relative dependencies to recommend the smallest next section or symbol read under a response budget.
+- Expose 33 tools consistently from C# and Rust, extend packaged smoke coverage, and keep only the latest three minor release summaries in both READMEs with the complete history linked from `CHANGELOG.md`.
+
 ## 0.13.0
 
 - Add `store_capsule` and `query_capsule` for content-addressed local evidence, line or regex reads, unseen-line suppression, and appended-data delta queries. Capsule stores enforce age, count, size, and sensitive-content response limits.
