@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.4
+
+- Describe when to use each router and what every operation does, so assistants prefer Zuma over generic terminal and file-read tools.
+- Server instructions now list the seven tools and use the zuma_task name.
+
 ## 1.0.3
 
 - Validate required arguments in the facade and report missing names.

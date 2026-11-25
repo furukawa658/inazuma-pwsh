@@ -74,7 +74,7 @@ fn array_tool_parameters_define_items() {
         initialize_response["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("set_task_anchor")
+            .contains("zuma_task")
     );
     let list_response = responses
         .iter()
