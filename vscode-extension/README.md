@@ -14,7 +14,7 @@ No manual `mcp.json` entry is required. The extension installs the platform bina
 
 **Your coding agent reads 7% of a design document and 1% of a build log—not 100%.**
 
-![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](media/before-after.gif)
+![Before/After: full read vs Zuma MCP. 68,000 chars -> 7%, 137,000 chars -> 1%](https://raw.githubusercontent.com/furukawa658/inazuma-pwsh/release/0.2.0/vscode-extension/media/before-after.gif)
 
 | Input | Full read | With Zuma MCP | Characters returned |
 | --- | --- | --- | --- |
