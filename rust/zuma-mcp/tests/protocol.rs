@@ -81,9 +81,20 @@ fn array_tool_parameters_define_items() {
         .find(|response| response["id"] == 2)
         .expect("tools/list response should be returned");
     let tools = list_response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 26);
+    assert_eq!(tools.len(), 33);
     assert!(tools.iter().any(|tool| tool["name"] == "prepare_handoff"));
-    for name in ["set_task_anchor", "get_task_anchor", "clear_task_anchor"] {
+    for name in [
+        "set_task_anchor",
+        "get_task_anchor",
+        "clear_task_anchor",
+        "store_capsule",
+        "query_capsule",
+        "semantic_git_diff",
+        "remember_context",
+        "query_context",
+        "compile_context",
+        "plan_context_read",
+    ] {
         assert!(
             tools.iter().any(|tool| tool["name"] == name),
             "missing {name}"
@@ -176,9 +187,17 @@ fn initializes_and_calls_file_tools() {
 
     std::fs::remove_file(path).unwrap();
     assert_eq!(responses.len(), 2);
-    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "Zuma");
+    let initialize = responses
+        .iter()
+        .find(|response| response["id"] == 1)
+        .expect("initialize response should be returned");
+    assert_eq!(initialize["result"]["serverInfo"]["name"], "Zuma");
+    let tool_response = responses
+        .iter()
+        .find(|response| response["id"] == 2)
+        .expect("peek_file response should be returned");
     let payload: Value = serde_json::from_str(
-        responses[1]["result"]["content"][0]["text"]
+        tool_response["result"]["content"][0]["text"]
             .as_str()
             .unwrap(),
     )

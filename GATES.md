@@ -1,23 +1,33 @@
-# Gates: Zuma MCP 0.11 handoff
+# Gates: Zuma MCP 0.14 context engine
 
-OWNS: rust/zuma-mcp/**, *.cs, vscode-extension/**, README.md, CHANGELOG.md, docs/**, GATES.md
+OWNS: rust/zuma-mcp/**, *.cs, vscode-extension/**, tools/**, README.md, CHANGELOG.md, docs/**, GATES.md
 
-Scope: Add safe deterministic chat handoff generation, Marketplace messaging, release metadata, and publish verification for Zuma MCP 0.11.0.
+Scope: Add deterministic semantic diff, persistent local context facts, compiled context, query-first read planning, 0.14 documentation, and verified publication.
 
-- [x] G1: Rust handoff protocol and parser tests pass
-  CHECK: node tools/verify-handoff-release.mjs rust
-  EXPECT: HANDOFF_TESTS_OK
-  EVIDENCE: 6 Rust tests passed and HANDOFF_TESTS_OK was emitted on 2026-11-24
+- [x] G1: Context engine C# build and MCP integration pass
+  CHECK: node tools/verify-context-release.mjs core
+  EXPECT: CONTEXT_CORE_OK
+  EVIDENCE: 2026-11-25, MCP integration 80 passed, CONTEXT_CORE_OK
 
-- [x] G2: C# build and extension provider tests pass
-  CHECK: node tools/verify-handoff-release.mjs
-  EXPECT: HANDOFF_RELEASE_CHECKS_OK
-  EVIDENCE: .NET build completed with 0 warnings and 0 errors; extension provider test passed on 2026-11-24
+- [x] G2: Rust tool protocol and packaged routing expose all context tools
+  CHECK: node tools/verify-context-release.mjs rust
+  EXPECT: CONTEXT_RUST_OK
+  EVIDENCE: 2026-11-25, Rust unit 10 and protocol 6 passed, CONTEXT_RUST_OK
 
-- [x] G3: Packaged MCP server exposes and executes prepare_handoff
-  CHECK: node tools/verify-handoff-release.mjs package
-  EXPECT: PACKAGE_OK
-  EVIDENCE: 0.11.0 win32-x64 VSIX packaged; 23-tool real smoke, cancellation, dotnet build, handoff, and parent lifetime passed on 2026-11-24
+- [x] G3: Packaged response and tool-count regressions pass
+  CHECK: node tools/verify-context-release.mjs package
+  EXPECT: CONTEXT_PACKAGE_OK
+  EVIDENCE: 2026-11-25, tools=33, context_engine=true, REAL_SMOKE_OK, PARENT_LIFETIME_OK
 
-- [x] G4: Marketplace release 0.11.0 is published and its display name is visible
-  EVIDENCE: GitHub Actions publish run 45335945305 completed for all five targets on 2026-11-24; Marketplace Gallery reports 0.11.0 for win32-x64, linux-x64, linux-arm64, darwin-x64, and darwin-arm64 with display name `Zuma MCP: Context & Log Optimizer for AI Coding`
+- [x] G4: 0.14.0 README keeps only the latest three minor releases and links the full changelog
+  CHECK: node tools/verify-context-release.mjs docs
+  EXPECT: CONTEXT_DOCS_OK
+  EVIDENCE: 2026-11-25, CONTEXT_DOCS_OK
+
+- [x] G5: Version metadata, working tree, and release workflow target 0.14.0
+  CHECK: node tools/verify-context-release.mjs release
+  EXPECT: CONTEXT_RELEASE_OK
+  EVIDENCE: 2026-11-25, version and workflow checks passed, CONTEXT_RELEASE_OK
+
+- [x] G6: Marketplace 0.14.0 is published for all five platform targets
+  EVIDENCE: 2026-11-25, publish run 45567067184 passed win32-x64, linux-x64, linux-arm64, darwin-x64, and darwin-arm64

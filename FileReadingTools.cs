@@ -36,7 +36,9 @@ public sealed class FileReadingTools
         [Description("Maximum number of outline entries to return (10 to 1000, default 200).")] int maxEntries = 200,
         [Description("Optional maximum outline level to include.")] int? maxLevel = null,
         CancellationToken cancellationToken = default) =>
-        UsageLog.TrackFileAsync("peek_file", path, PeekFile(path, fullThreshold, maxEntries, maxLevel));
+        UsageLog.TrackFileAsync("peek_file", path, RedundantReadGuard.TrackAsync(
+            "peek_file", path, new { fullThreshold, maxEntries, maxLevel },
+            () => PeekFile(path, fullThreshold, maxEntries, maxLevel)));
 
     private static Task<string> PeekFile(string path, int fullThreshold, int maxEntries, int? maxLevel)
     {
@@ -88,7 +90,9 @@ public sealed class FileReadingTools
         [Description("Maximum characters of formatted text to return (clamped 1000..50000, default 12000).")] int maxChars = 12000,
         [Description("Optional array of section names or objects with query or startLine and endLine; up to 10 ranges.")] JsonElement[]? ranges = null,
         CancellationToken cancellationToken = default) =>
-        UsageLog.TrackFileAsync("read_section", path, ReadSections(path, query, startLine, endLine, maxChars, ranges));
+        UsageLog.TrackFileAsync("read_section", path, RedundantReadGuard.TrackAsync(
+            "read_section", path, new { query, startLine, endLine, maxChars, ranges },
+            () => ReadSections(path, query, startLine, endLine, maxChars, ranges)));
 
     [McpServerTool(Name = "read_symbol")]
     [Description("Read one named declaration from a code file with line numbers. Symbol matching is case-insensitive and must match the declared identifier. Overloads or duplicate names require occurrence to select a 1-based candidate.")]
@@ -98,7 +102,9 @@ public sealed class FileReadingTools
         [Description("1-based matching declaration to select when multiple symbols share the same name.")] int? occurrence = null,
         [Description("Maximum characters of formatted text to return (clamped 1000..50000, default 12000).")] int maxChars = 12000,
         CancellationToken cancellationToken = default) =>
-        UsageLog.TrackFileAsync("read_symbol", path, ReadSymbol(path, symbol, occurrence, maxChars));
+        UsageLog.TrackFileAsync("read_symbol", path, RedundantReadGuard.TrackAsync(
+            "read_symbol", path, new { symbol, occurrence, maxChars },
+            () => ReadSymbol(path, symbol, occurrence, maxChars)));
 
     private static Task<string> ReadSymbol(string path, string symbol, int? occurrence, int maxChars)
     {
@@ -478,7 +484,9 @@ public sealed class FileReadingTools
         [Description("Maximum number of groups to return (clamped 1..200, default 30).")] int maxGroups = 30,
         [Description("Maximum characters of serialized output JSON (clamped 2000..50000, default 8000).")] int maxChars = 8000,
         CancellationToken cancellationToken = default) =>
-        UsageLog.TrackFileAsync("summarize_log", path, SummarizeLog(path, pattern, contextLines, tailLines, maxGroups, maxChars));
+        UsageLog.TrackFileAsync("summarize_log", path, RedundantReadGuard.TrackAsync(
+            "summarize_log", path, new { pattern, contextLines, tailLines, maxGroups, maxChars },
+            () => SummarizeLog(path, pattern, contextLines, tailLines, maxGroups, maxChars)));
 
     private static Task<string> SummarizeLog(string path, string pattern, int contextLines, int tailLines, int maxGroups, int maxChars)
     {

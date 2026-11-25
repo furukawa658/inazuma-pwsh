@@ -2,9 +2,11 @@
 
 mod file_tools;
 mod handoff;
+mod read_guard;
 mod sidecar;
 mod task_anchor;
 
+use read_guard::RedundantReadGuard;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sidecar::Sidecar;
@@ -86,6 +88,7 @@ struct Bridge {
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     task_sidecar: Mutex<Option<Arc<Sidecar>>>,
     task_anchors: task_anchor::TaskAnchorStore,
+    read_guard: RedundantReadGuard,
 }
 
 impl Bridge {
@@ -94,6 +97,7 @@ impl Bridge {
             sidecar: Mutex::new(None),
             task_sidecar: Mutex::new(None),
             task_anchors: task_anchor::TaskAnchorStore::new(),
+            read_guard: RedundantReadGuard::new(),
         }
     }
 
@@ -511,6 +515,13 @@ fn tool_definitions() -> Value {
         { "name": "read_symbol", "description": "Read one named declaration from a code file.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "symbol": { "type": "string" }, "occurrence": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["path", "symbol"] } },
         { "name": "summarize_log", "description": "Summarize matching lines from a large log.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "pattern": { "type": "string" }, "contextLines": { "type": "integer" }, "tailLines": { "type": "integer" }, "maxGroups": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["path"] } },
         { "name": "search_files", "description": "Search files under a directory and return compact matches.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" }, "pattern": { "type": "string" }, "fileName": { "type": "string" }, "caseSensitive": { "type": "boolean" }, "maxResults": { "type": "integer" }, "maxPerFile": { "type": "integer" }, "literal": { "type": "boolean" }, "contextLines": { "type": "integer" }, "exclude": { "type": "array", "items": { "type": "string" } } }, "required": ["path", "pattern"] } },
+        { "name": "store_capsule", "description": "Store large evidence locally and return a compact capsule ID and summary.", "inputSchema": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["file", "command-output", "test-report", "log"] }, "content": { "type": "string" }, "sourcePath": { "type": "string" }, "workingDirectory": { "type": "string" }, "label": { "type": "string" }, "maxSummaryChars": { "type": "integer" } }, "required": ["kind"] } },
+        { "name": "query_capsule", "description": "Read only unseen capsule lines or an appended delta from an earlier capsule.", "inputSchema": { "type": "object", "properties": { "capsuleId": { "type": "string" }, "baseCapsuleId": { "type": "string" }, "query": { "type": "string" }, "startLine": { "type": "integer" }, "endLine": { "type": "integer" }, "onlyUnseen": { "type": "boolean" }, "maxChars": { "type": "integer" } }, "required": ["capsuleId"] } },
+        { "name": "semantic_git_diff", "description": "Return compact declaration-level additions, removals, and modifications for a Git worktree.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "baseRef": { "type": "string" }, "path": { "type": "string" }, "maxChanges": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["workingDirectory"] } },
+        { "name": "remember_context", "description": "Persist one compact fact, decision, unknown, next action, or invalidation marker.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "kind": { "type": "string", "enum": ["fact", "decision", "unknown", "next-action", "invalidated"] }, "key": { "type": "string" }, "value": { "type": "string" }, "evidence": { "type": "string" } }, "required": ["workingDirectory", "kind", "key", "value"] } },
+        { "name": "query_context", "description": "Query active structured facts, decisions, unknowns, next actions, and invalidations for one workspace.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "query": { "type": "string" }, "kinds": { "type": "array", "items": { "type": "string" } }, "onlyActive": { "type": "boolean" }, "maxResults": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["workingDirectory"] } },
+        { "name": "compile_context", "description": "Compile active workspace context into a bounded structured brief.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "goal": { "type": "string" }, "maxChars": { "type": "integer" }, "includeEvidence": { "type": "boolean" } }, "required": ["workingDirectory", "goal"] } },
+        { "name": "plan_context_read", "description": "Rank the smallest next file, symbol, or section read for a question.", "inputSchema": { "type": "object", "properties": { "workingDirectory": { "type": "string" }, "question": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["workingDirectory", "question"] } },
         { "name": "prepare_handoff", "description": "Prepare a bounded AI handoff from an explicitly selected VS Code chat session.", "inputSchema": { "type": "object", "properties": { "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } } } }
     ] })
 }
@@ -656,12 +667,17 @@ fn call_tool(
     }
 
     if can_handle_locally(name, arguments) {
-        let payload = match name {
+        let action = || match name {
             "peek_file" => peek_file(arguments),
             "read_section" => read_section(arguments),
             "search_files" => file_tools::search_files(arguments),
             "summarize_log" => file_tools::summarize_log(arguments),
             _ => unreachable!(),
+        };
+        let payload = if matches!(name, "peek_file" | "read_section" | "summarize_log") {
+            bridge.read_guard.track(name, arguments, action)
+        } else {
+            action()
         };
         let response = payload.to_string();
         if let Some(path) = arguments.get("path").and_then(Value::as_str) {
@@ -829,6 +845,19 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_definitions_include_evidence_capsules() {
+        let definitions = tool_definitions();
+        let names: Vec<&str> = definitions["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"store_capsule"));
+        assert!(names.contains(&"query_capsule"));
+    }
 
     #[test]
     fn markdown_outline_ignores_long_fenced_content() {
