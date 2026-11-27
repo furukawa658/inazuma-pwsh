@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Add `zuma_execute` `verify_all` to select and run ordered checks from tracked and untracked Git changes, then return the first failure and compact step summaries.
+- Add `zuma_gate` output budgets with 20% and 10% warnings, handoff guidance, exhausted-response compression, and asynchronous task result accounting.
+- Preserve essential handoff content when an output budget is exhausted, and record `verify_all` as the latest verification in handoff history.
+
 ## 1.0.4
 
 - Describe when to use each router and what every operation does, so assistants prefer Zuma over generic terminal and file-read tools.
