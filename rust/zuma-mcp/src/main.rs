@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+mod budget_guard;
 mod file_tools;
 mod handoff;
 mod read_guard;
@@ -88,6 +89,7 @@ struct Bridge {
     sidecar: Mutex<Option<Arc<Sidecar>>>,
     task_sidecar: Mutex<Option<Arc<Sidecar>>>,
     task_anchors: task_anchor::TaskAnchorStore,
+    output_budget: budget_guard::OutputBudget,
     read_guard: RedundantReadGuard,
 }
 
@@ -97,6 +99,7 @@ impl Bridge {
             sidecar: Mutex::new(None),
             task_sidecar: Mutex::new(None),
             task_anchors: task_anchor::TaskAnchorStore::new(),
+            output_budget: budget_guard::OutputBudget::new(),
             read_guard: RedundantReadGuard::new(),
         }
     }
@@ -493,10 +496,10 @@ fn tool_definitions() -> Value {
     json!({ "tools": [
         { "name": "zuma_task", "description": "Record the goal, acceptance criteria, out-of-scope items, and allowed paths of the current task (operation set, get, clear). Call set at the start of a substantial task and clear when it is finished.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["set", "get", "clear"] }, "goal": { "type": "string" }, "target": { "type": "string" }, "acceptanceCriteria": { "type": "array", "items": { "type": "string" } }, "outOfScope": { "type": "array", "items": { "type": "string" } }, "allowedPaths": { "type": "array", "items": { "type": "string" } }, "sessionId": { "type": "string" } }, "required": ["operation"] } },
         { "name": "zuma_shell", "description": "Run PowerShell commands in a persistent session that keeps the working directory and variables. Use this instead of the generic terminal tool for any shell command; output is size-bounded and the full log path is returned. Operation: execute, reset_session, or list_sessions.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["execute", "reset_session", "list_sessions"] }, "script": { "type": "string" }, "timeoutSeconds": { "type": "integer" }, "workingDirectory": { "type": "string" }, "maxOutputChars": { "type": "integer" }, "sessionId": { "type": "string" }, "compactResponse": { "type": "boolean" } }, "required": ["operation"] } },
-        { "name": "zuma_execute", "description": "Run builds, tests, and linters and get a compact result (failing tests and new diagnostics only) instead of raw terminal output. Use this instead of running dotnet, bun test, pytest, vitest, tsc, eslint, cargo, or playwright in a terminal. Operation selects dotnet_build, dotnet_test, affected_tests (tests for Git-changed files only), playwright, bun_test, pytest, vitest, tsc, eslint, or cargo_check.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["dotnet_build", "dotnet_test", "affected_tests", "playwright", "bun_test", "pytest", "vitest", "tsc", "eslint", "cargo_check"] }, "workingDirectory": { "type": "string" }, "testArgs": { "type": "array", "items": { "type": "string" } }, "tscArgs": { "type": "array", "items": { "type": "string" } }, "eslintArgs": { "type": "array", "items": { "type": "string" } }, "cargoArgs": { "type": "array", "items": { "type": "string" } }, "target": { "type": "string" }, "includeWarnings": { "type": "boolean" }, "onlyNew": { "type": "boolean" }, "regressionsOnly": { "type": "boolean" }, "timeoutSeconds": { "type": "integer" }, "contextLines": { "type": "integer" }, "compactResponse": { "type": "boolean" }, "pythonPath": { "type": "string" } }, "required": ["operation", "workingDirectory"] } },
+        { "name": "zuma_execute", "description": "Run builds, tests, and linters and get a compact result (failing tests and new diagnostics only) instead of raw terminal output. Use this instead of running dotnet, bun test, pytest, vitest, tsc, eslint, cargo, or playwright in a terminal. Operation selects verify_all (ordered checks for changed files), dotnet_build, dotnet_test, affected_tests (tests for Git-changed files only), playwright, bun_test, pytest, vitest, tsc, eslint, or cargo_check.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["verify_all", "dotnet_build", "dotnet_test", "affected_tests", "playwright", "bun_test", "pytest", "vitest", "tsc", "eslint", "cargo_check"] }, "workingDirectory": { "type": "string" }, "testArgs": { "type": "array", "items": { "type": "string" } }, "tscArgs": { "type": "array", "items": { "type": "string" } }, "eslintArgs": { "type": "array", "items": { "type": "string" } }, "cargoArgs": { "type": "array", "items": { "type": "string" } }, "target": { "type": "string" }, "includeWarnings": { "type": "boolean" }, "onlyNew": { "type": "boolean" }, "regressionsOnly": { "type": "boolean" }, "continueOnError": { "type": "boolean" }, "timeoutSeconds": { "type": "integer" }, "contextLines": { "type": "integer" }, "compactResponse": { "type": "boolean" }, "pythonPath": { "type": "string" } }, "required": ["operation", "workingDirectory"] } },
         { "name": "zuma_read", "description": "Read files and logs with bounded output instead of reading whole files. Use before opening a large file or log. Operation selects peek_file (outline of a large file), read_section (line range or heading), read_symbol (one function or class), summarize_log (errors and tail of a log), search_files (regex or literal search across files), or inspect_playwright_trace.", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["peek_file", "read_section", "read_symbol", "summarize_log", "search_files", "inspect_playwright_trace"] }, "path": { "type": "string" }, "pattern": { "type": "string" }, "symbol": { "type": "string" }, "query": { "type": "string" }, "startLine": { "type": "integer" }, "endLine": { "type": "integer" }, "workingDirectory": { "type": "string" }, "tracePath": { "type": "string" }, "maxChars": { "type": "integer" }, "maxResults": { "type": "integer" }, "maxPerFile": { "type": "integer" }, "contextLines": { "type": "integer" }, "tailLines": { "type": "integer" }, "literal": { "type": "boolean" }, "exclude": { "type": "array", "items": { "type": "string" } }, "ranges": { "type": "array", "items": { "oneOf": [{ "type": "string" }, { "type": "object" }] } } }, "required": ["operation"] } },
         { "name": "zuma_context", "description": "Keep large evidence and working notes outside the chat. Operation selects store_capsule and query_capsule (save a large log or output, then query only the lines needed), semantic_git_diff (declaration-level summary of uncommitted changes), remember and query (store and search facts, decisions, unknowns, and next actions), compile (grouped summary of stored records), or plan_read (rank files to read for a question).", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["store_capsule", "query_capsule", "semantic_git_diff", "remember", "query", "compile", "plan_read"] }, "kind": { "type": "string" }, "content": { "type": "string" }, "sourcePath": { "type": "string" }, "workingDirectory": { "type": "string" }, "label": { "type": "string" }, "capsuleId": { "type": "string" }, "baseCapsuleId": { "type": "string" }, "query": { "type": "string" }, "key": { "type": "string" }, "value": { "type": "string" }, "evidence": { "type": "string" }, "goal": { "type": "string" }, "baseRef": { "type": "string" }, "path": { "type": "string" }, "onlyUnseen": { "type": "boolean" }, "onlyActive": { "type": "boolean" }, "includeEvidence": { "type": "boolean" }, "paths": { "type": "array", "items": { "type": "string" } }, "maxResults": { "type": "integer" }, "maxRecommendations": { "type": "integer" }, "maxChars": { "type": "integer" } }, "required": ["operation", "workingDirectory"] } },
-        { "name": "zuma_gate", "description": "Inspect or change execution-loop protection that blocks repeated unscoped full test runs (operation get, set, reset).", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["get", "set", "reset"] }, "mode": { "type": "string", "enum": ["manual", "incremental", "milestone"] }, "enabled": { "type": "boolean" }, "repeatFailureThreshold": { "type": "integer" }, "historySeconds": { "type": "integer" }, "skipRedPhase": { "type": "boolean" }, "workspaceKey": { "type": "string" } }, "required": ["operation"] } },
+        { "name": "zuma_gate", "description": "Inspect or change execution-loop protection (operation get, set, reset), or manage response budgets (operation set_budget, clear_budget).", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["get", "set", "reset", "set_budget", "clear_budget"] }, "mode": { "type": "string", "enum": ["manual", "incremental", "milestone"] }, "enabled": { "type": "boolean" }, "repeatFailureThreshold": { "type": "integer" }, "historySeconds": { "type": "integer" }, "skipRedPhase": { "type": "boolean" }, "workspaceKey": { "type": "string" }, "budgetChars": { "type": "integer", "minimum": 1 }, "budgetUnit": { "type": "string", "enum": ["characters"] } }, "required": ["operation"] } },
         { "name": "zuma_handoff", "description": "Prepare a bounded summary of a chat session to continue the work in a new chat (operation prepare).", "inputSchema": { "type": "object", "properties": { "operation": { "type": "string", "enum": ["prepare"] }, "sessionPath": { "type": "string" }, "sessionId": { "type": "string" }, "workingDirectory": { "type": "string" }, "includeTitles": { "type": "boolean" }, "nextActionHint": { "type": "string" }, "maxChars": { "type": "integer" } }, "required": ["operation"] } }
     ] })
 }
@@ -693,6 +696,7 @@ fn routed_params(params: &Value) -> Option<(String, Value)> {
             _ => return None,
         },
         "zuma_execute" => match operation {
+            "verify_all" => "verify_all",
             "dotnet_build" => "run_dotnet_build",
             "dotnet_test" => "run_dotnet_test",
             "affected_tests" => "run_affected_tests",
@@ -723,6 +727,8 @@ fn routed_params(params: &Value) -> Option<(String, Value)> {
             "get" => "get_execution_gate",
             "set" => "set_execution_gate",
             "reset" => "reset_execution_gate",
+            "set_budget" => "set_output_budget",
+            "clear_budget" => "clear_output_budget",
             _ => return None,
         },
         "zuma_handoff" if operation == "prepare" => "prepare_handoff",
@@ -769,6 +775,12 @@ fn call_tool(
     if name == "clear_task_anchor" {
         return json!({ "content": [{ "type": "text", "text": bridge.task_anchors.clear().to_string() }] });
     }
+    if name == "set_output_budget" {
+        return json!({ "content": [{ "type": "text", "text": bridge.output_budget.set(arguments).to_string() }] });
+    }
+    if name == "clear_output_budget" {
+        return json!({ "content": [{ "type": "text", "text": bridge.output_budget.clear().to_string() }] });
+    }
 
     if name == "prepare_handoff" {
         let payload = handoff::prepare_handoff(arguments);
@@ -780,6 +792,7 @@ fn call_tool(
             .unwrap_or_else(|| Path::new(""));
         record_usage(name, usage_path, &response);
         let mut result = json!({ "content": [{ "type": "text", "text": response }] });
+        bridge.output_budget.decorate_essential(&mut result);
         task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
         return result;
     }
@@ -787,6 +800,7 @@ fn call_tool(
     if uses_task_protocol(params) {
         let mut result =
             forward_response(bridge.task_request_for(client_id, "tools/call", params.clone()));
+        bridge.output_budget.decorate(&mut result, false);
         task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
         return result;
     }
@@ -809,6 +823,7 @@ fn call_tool(
             record_usage(name, Path::new(path), &response);
         }
         let mut result = json!({ "content": [{ "type": "text", "text": response }] });
+        bridge.output_budget.decorate(&mut result, true);
         task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
         return result;
     }
@@ -825,6 +840,7 @@ fn call_tool(
     let response = bridge.request_for(client_id, "tools/call", forwarded_params);
     handoff::record_verification(name, arguments, &response);
     let mut result = forward_response(response);
+    bridge.output_budget.decorate(&mut result, true);
     task_anchor::TaskAnchorStore::decorate_snapshot(&mut result, task_anchor);
     result
 }
@@ -848,6 +864,7 @@ fn handle_request(request: Request, bridge: &Bridge, task_anchor: Option<&Value>
             bridge.task_request_for(&id, &request.method, request.params),
         );
         if let Some(result) = response.get_mut("result") {
+            bridge.output_budget.decorate(result, true);
             task_anchor::TaskAnchorStore::decorate_snapshot(result, task_anchor);
         }
         return Some(response);
@@ -882,7 +899,7 @@ fn run() -> io::Result<()> {
     let stdin = io::stdin();
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let bridge = Arc::new(Bridge::new());
-    let mut workers = Vec::new();
+    let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
 
     for line in stdin.lock().lines() {
         let line = line?;
@@ -904,18 +921,18 @@ fn run() -> io::Result<()> {
                 continue;
             }
         };
-        let is_anchor_call = request.method == "tools/call"
-            && request
-                .params
-                .get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|name| {
-                    matches!(
-                        name,
-                        "set_task_anchor" | "get_task_anchor" | "clear_task_anchor"
-                    )
-                });
-        if is_anchor_call {
+        let is_state_call = request.method == "tools/call"
+            && request.params.get("name").and_then(Value::as_str).is_some_and(|name| {
+                matches!(
+                    name,
+                    "set_task_anchor" | "get_task_anchor" | "clear_task_anchor"
+                ) || (name == "zuma_gate"
+                    && request.params.get("arguments")
+                        .and_then(|arguments| arguments.get("operation"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|operation| matches!(operation, "set_budget" | "clear_budget")))
+            });
+        if is_state_call {
             if let Some(response) = handle_request(request, &bridge, None) {
                 let mut output = stdout.lock().unwrap();
                 writeln!(output, "{response}")?;
@@ -1005,6 +1022,31 @@ mod tests {
             .unwrap();
         assert!(operations.iter().any(|operation| operation == "store_capsule"));
         assert!(operations.iter().any(|operation| operation == "query_capsule"));
+    }
+
+    #[test]
+    fn routes_v110_p0_operations_and_budget_arguments() {
+        let params = serde_json::json!({
+            "name": "zuma_execute",
+            "arguments": { "operation": "verify_all", "workingDirectory": "C:\\repo" }
+        });
+        let (name, arguments) = routed_params(&params).unwrap();
+        assert_eq!(name, "verify_all");
+        assert_eq!(arguments["workingDirectory"], "C:\\repo");
+
+        let definitions = tool_definitions();
+        let gate = definitions["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "zuma_gate")
+            .unwrap();
+        let properties = gate["inputSchema"]["properties"].as_object().unwrap();
+        assert_eq!(properties["budgetChars"]["type"], "integer");
+        assert_eq!(properties["budgetUnit"]["type"], "string");
+        let operations = properties["operation"]["enum"].as_array().unwrap();
+        assert!(operations.iter().any(|operation| operation == "set_budget"));
+        assert!(operations.iter().any(|operation| operation == "clear_budget"));
     }
 
     #[test]

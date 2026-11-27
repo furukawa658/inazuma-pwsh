@@ -49,13 +49,17 @@ impl Sidecar {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                    eprintln!("C# compatibility server returned invalid JSON-RPC output.");
                     continue;
                 };
                 let Some(id) = message.get("id").and_then(Value::as_str) else {
+                    eprintln!("C# compatibility server response did not contain a string request ID.");
                     continue;
                 };
                 if let Some(sender) = reader_pending.lock().unwrap().remove(id) {
                     let _ = sender.send(message);
+                } else {
+                    eprintln!("C# compatibility server returned an unexpected request ID.");
                 }
             }
             let waiting: Vec<_> = reader_pending.lock().unwrap().drain().collect();

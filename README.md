@@ -51,10 +51,10 @@ These figures measure serialized MCP response characters against source characte
 | --- | --- |
 | `zuma_task` | `set`, `get`, `clear` |
 | `zuma_shell` | `execute`, `reset_session`, `list_sessions` |
-| `zuma_execute` | Build, test, lint, type-check, and affected-test runners |
+| `zuma_execute` | `verify_all`, build, test, lint, type-check, and affected-test runners |
 | `zuma_read` | File outlines, sections, symbols, log summaries, file search, and trace inspection |
 | `zuma_context` | Capsules, semantic Git diff, context memory, compilation, and read planning |
-| `zuma_gate` | `get`, `set`, `reset` execution-loop protection |
+| `zuma_gate` | `get`, `set`, `reset` execution-loop protection and `set_budget`, `clear_budget` output budgets |
 | `zuma_handoff` | `prepare` a bounded chat handoff |
 
 The existing direct tool names remain callable for compatibility. New clients should use the routers and pass the operation that selects the implementation.
@@ -69,6 +69,12 @@ The existing direct tool names remain callable for compatibility. New clients sh
 | `clear_task_anchor` | Clear the active task anchor after the task is complete or when a new unrelated task starts. |
 
 Set an anchor once at the start of a substantial task and update it when the goal or scope changes. Path-bearing tool calls outside `allowedPaths` return a `scopeWarnings` entry; this is a reminder, not a filesystem sandbox. Anchor state stays in the Zuma server process and is not persisted with the chat or included in handoff logs.
+
+### Verification and Output Budget
+
+Call `zuma_execute` with `operation: verify_all` to select supported checks from tracked and untracked Git changes. Zuma runs applicable .NET, TypeScript, Rust, and affected-test steps in order and returns the first failed step with a compact summary of earlier results.
+
+Call `zuma_gate` with `operation: set_budget` and a positive `budgetChars` value to track this task's returned characters. Ordinary tool responses include remaining characters and warning level. At 20% remaining Zuma warns, at 10% it recommends handoff, and after exhaustion it omits response details. Use `clear_budget` to finish the budget period.
 
 ### Execution Gate
 
@@ -95,6 +101,7 @@ The circuit breaker is shared by typed diagnostic tools and test commands run th
 | `run_dotnet_build` | Run a build and return the exit code and SARIF compiler diagnostics. Warnings are omitted by default. |
 | `run_dotnet_test` | Run `dotnet test` and return test counts and failures with file, line, message, and stack from its TRX reports. |
 | `run_affected_tests` | Select tests from Git changes, untracked files, naming conventions, and relative imports, then run each detected test runner once. |
+| `verify_all` | Build an ordered verification plan from Git changes, stop at the first failed step, and run affected tests last. |
 | `run_playwright` | Run locally installed Playwright and return test counts, failures, and attachment paths from its JSON report. |
 | `inspect_playwright_trace` | Inspect a trace ZIP for failed actions, HTTP and console errors, and a DOM excerpt. |
 | `run_bun_test` | Run `bun test` and return test counts and failures with file, line, message, and stack from its JUnit XML report. |

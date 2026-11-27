@@ -227,6 +227,34 @@ fn reminds_each_tool_about_the_active_task_anchor() {
 }
 
 #[test]
+fn applies_output_budget_through_the_public_gate_router() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("zuma-budget-{unique}.md"));
+    std::fs::write(&path, "# Budget\nbody\n").unwrap();
+
+    let responses = call(&[
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "zuma_gate", "arguments": { "operation": "set_budget", "budgetChars": 10, "budgetUnit": "characters" } } }),
+        serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "zuma_read", "arguments": { "operation": "peek_file", "path": path.to_string_lossy() } } }),
+    ]);
+
+    assert_eq!(tool_payload(&responses, 2)["status"], "set");
+    let guarded = tool_payload(&responses, 3);
+    assert_eq!(guarded["budgetGuard"]["level"], "exceeded", "{guarded}");
+    assert_eq!(guarded["budgetGuard"]["remainingChars"], 0);
+    assert_eq!(guarded["budgetGuard"]["handoffRecommended"], true);
+    assert!(guarded["budgetGuard"]["warning"]
+        .as_str()
+        .unwrap()
+        .contains("Prepare handoff soon"));
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn handles_code_search_and_log_tools_without_sidecar() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)

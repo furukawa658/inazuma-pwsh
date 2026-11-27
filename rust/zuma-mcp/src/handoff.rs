@@ -267,7 +267,8 @@ fn verification_history_path() -> PathBuf {
 pub fn record_verification(tool: &str, arguments: &Value, response: &Result<Value, String>) {
     if !matches!(
         tool,
-        "run_dotnet_build"
+        "verify_all"
+            | "run_dotnet_build"
             | "run_dotnet_test"
             | "run_playwright"
             | "run_bun_test"
