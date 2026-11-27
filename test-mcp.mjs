@@ -699,7 +699,7 @@ try {
         } finally { child.stdin.end(); child.kill(); }
     });
     await check('public tool descriptions are in English', async () => {
-        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'run_affected_tests', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'run_cargo_check', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
+        for (const name of ['execute_powershell', 'reset_powershell_session', 'run_dotnet_build', 'run_dotnet_test', 'run_playwright', 'run_affected_tests', 'verify_all', 'inspect_playwright_trace', 'run_bun_test', 'run_pytest', 'run_vitest', 'run_tsc', 'run_eslint', 'run_cargo_check', 'peek_file', 'read_section', 'summarize_log', 'search_files']) {
             const definition = listed.result.tools.find(tool => tool.name === name);
             assert.ok(definition?.description, `${name} is missing a description`);
             assert.match(definition.description, /^[\x00-\x7f]+$/, `${name} description is not English`);
@@ -1541,6 +1541,22 @@ process.exitCode = 1;
         assert.equal(malformed.status, 'report_unavailable', JSON.stringify(malformed));
         await rm(malformed.fullLogPath);
         assert.match((await tool('run_dotnet_test', { workingDirectory: project, testArgs: ['--logger', 'html'] })).message, /managed by this tool/);
+    });
+    await check('verify_all builds changed dotnet files before affected tests', async () => {
+        const project = path.join(fixture, 'verify-all-dotnet');
+        await mkdir(project, { recursive: true });
+        await writeFile(path.join(project, 'VerifyAll.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>');
+        await writeFile(path.join(project, 'Program.cs'), 'System.Console.WriteLine("before");\n');
+        assert.equal(spawnSync('git', ['init', '-q', project]).status, 0);
+        assert.equal(spawnSync('git', ['-C', project, 'add', '.']).status, 0);
+        assert.equal(spawnSync('git', ['-C', project, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'initial']).status, 0);
+        await writeFile(path.join(project, 'Program.cs'), 'System.Console.WriteLine("after");\n');
+
+        const response = await tool('verify_all', { workingDirectory: project, timeoutSeconds: 180 });
+        assert.equal(response.status, 'success', JSON.stringify(response));
+        assert.deepEqual(response.plan.map(step => step.operation), ['dotnet_build', 'affected_tests']);
+        assert.deepEqual(response.completedSteps.map(step => step.status), ['success', 'no_tests']);
+        assert.deepEqual(response.remainingSteps, []);
     });
     await check('run_affected_tests selects imported Vitest tests from git changes', async () => {
         const project = path.join(fixture, 'affected-tests');

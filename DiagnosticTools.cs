@@ -17,6 +17,8 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime, Execution
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> CargoCheckBaselines = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, HashSet<string>> TestBaselines = new();
 
+    private sealed record VerificationStep(string Operation, string ProjectDirectory);
+
     [McpServerTool(Name = "run_dotnet_build")]
     [Description("Run dotnet build and return concise SARIF diagnostics and the exit code. The full log is saved to fullLogPath. Diagnostics for different projects are written to separate files.")]
     public Task<string> RunDotnetBuildAsync(
@@ -349,6 +351,190 @@ public sealed class DiagnosticTools(IHostApplicationLifetime lifetime, Execution
     private static string AsTestArgument(string path) => path.StartsWith("-", StringComparison.Ordinal) ? "./" + path : path;
 
     private static string EscapeDotnetFilterValue(string value) => System.Text.RegularExpressions.Regex.Replace(value, @"[\\&|=!~]", @"\$0");
+
+    [McpServerTool(Name = "verify_all")]
+    [Description("Select ordered checks from tracked and untracked Git changes, run them sequentially, and return the first failed step plus compact success and pending-step summaries.")]
+    public async Task<string> VerifyAllAsync(string workingDirectory,
+        [Description("Optional absolute path to the Python executable used by selected pytest files.")] string? pythonPath = null,
+        [Description("Continue through later planned steps after a failure. Defaults to false.")] bool continueOnError = false,
+        int timeoutSeconds = 180, [Description(ContextLinesText)] int contextLines = 0,
+        [Description(CompactResponseText)] bool compactResponse = true, CancellationToken cancellationToken = default)
+    {
+        if (!Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory))
+        {
+            UsageLog.RecordCall("verify_all");
+            return JsonDefaults.Serialize(new { status = "error", message = "workingDirectory must be an existing absolute directory." });
+        }
+
+        try
+        {
+            UsageLog.RecordCall("verify_all");
+            var (root, changedFiles, selected) = await AffectedTestSelector.SelectAsync(workingDirectory, cancellationToken);
+            var plan = BuildVerificationPlan(root, changedFiles, selected);
+            if (plan.Count == 0)
+                return JsonDefaults.Serialize(new
+                {
+                    status = "no_checks",
+                    repositoryRoot = root,
+                    changedFiles,
+                    message = "No supported build, lint, type-check, or affected-test steps were detected.",
+                    completedSteps = Array.Empty<object>(),
+                    remainingSteps = Array.Empty<object>()
+                });
+
+            var completed = new JsonArray();
+            JsonObject? failed = null;
+            var failedIndex = -1;
+            for (var index = 0; index < plan.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var step = plan[index];
+                var started = DateTimeOffset.UtcNow;
+                var resultText = step.Operation switch
+                {
+                    "dotnet_build" => await RunDotnetBuildAsync(step.ProjectDirectory,
+                        target: null, includeWarnings: false, onlyNew: true, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "tsc" => await RunTscAsync(step.ProjectDirectory,
+                        tscArgs: null, tscPath: null, timeoutSeconds, contextLines, onlyNew: true, compactResponse, cancellationToken),
+                    "eslint" => await RunEslintAsync(step.ProjectDirectory,
+                        eslintArgs: null, onlyNew: true, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "cargo_check" => await RunCargoCheckAsync(step.ProjectDirectory,
+                        cargoArgs: null, onlyNew: true, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    "affected_tests" => await RunAffectedTestsAsync(root, pythonPath, timeoutSeconds, contextLines, compactResponse, cancellationToken),
+                    _ => JsonDefaults.Serialize(new { status = "error", message = $"Unsupported verification operation: {step.Operation}" })
+                };
+                var result = JsonNode.Parse(resultText)!.AsObject();
+                var status = result["status"]?.GetValue<string>() ?? "error";
+                var summary = SummarizeVerificationStep(step, root, status, started, result);
+                completed.Add(summary);
+                if (IsVerificationFailure(status) && failed == null)
+                {
+                    failed = new JsonObject
+                    {
+                        ["step"] = step.Operation,
+                        ["projectDirectory"] = RelativeDirectory(root, step.ProjectDirectory),
+                        ["result"] = result
+                    };
+                    failedIndex = index;
+                    if (!continueOnError) break;
+                }
+            }
+
+            var remaining = failedIndex >= 0 && !continueOnError
+                ? plan.Skip(failedIndex + 1).Select(step => new { operation = step.Operation, projectDirectory = RelativeDirectory(root, step.ProjectDirectory) }).ToArray()
+                : [];
+            return JsonDefaults.Serialize(new
+            {
+                status = failed == null ? "success" : "error",
+                repositoryRoot = root,
+                changedFiles,
+                plan = plan.Select(step => new { operation = step.Operation, projectDirectory = RelativeDirectory(root, step.ProjectDirectory) }),
+                completedSteps = completed,
+                failure = failed,
+                remainingSteps = remaining
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return JsonDefaults.Serialize(new { status = "cancelled" });
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or System.ComponentModel.Win32Exception)
+        {
+            return JsonDefaults.Serialize(new { status = "error", message = exception.Message });
+        }
+    }
+
+    private static List<VerificationStep> BuildVerificationPlan(string root, string[] changedFiles,
+        IReadOnlyCollection<AffectedTestSelector.Selection> selected)
+    {
+        var steps = new List<VerificationStep>();
+        var dotnetDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var nodeDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cargoDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hasCodeChanges = selected.Count > 0;
+        foreach (var relativePath in changedFiles)
+        {
+            var extension = Path.GetExtension(relativePath);
+            var absolute = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
+            {
+                hasCodeChanges = true;
+                dotnetDirectories.Add(FindContainingDirectory(root, absolute, directory => Directory.GetFiles(directory, "*.csproj").Length > 0));
+            }
+            else if (extension is ".ts" or ".tsx" or ".js" or ".jsx" or ".mts" or ".cts" or ".mjs" or ".cjs"
+                     || Path.GetFileName(relativePath).Equals("package.json", StringComparison.OrdinalIgnoreCase)
+                     || Path.GetFileName(relativePath).Equals("tsconfig.json", StringComparison.OrdinalIgnoreCase))
+            {
+                hasCodeChanges = true;
+                var directory = FindContainingDirectory(root, absolute, candidate => File.Exists(Path.Combine(candidate, "package.json")));
+                nodeDirectories.Add(directory);
+            }
+            else if (extension.Equals(".rs", StringComparison.OrdinalIgnoreCase)
+                     || Path.GetFileName(relativePath).Equals("Cargo.toml", StringComparison.OrdinalIgnoreCase)
+                     || Path.GetFileName(relativePath).Equals("Cargo.lock", StringComparison.OrdinalIgnoreCase))
+            {
+                hasCodeChanges = true;
+                cargoDirectories.Add(FindContainingDirectory(root, absolute, candidate => File.Exists(Path.Combine(candidate, "Cargo.toml"))));
+            }
+            else if (extension.Equals(".py", StringComparison.OrdinalIgnoreCase))
+            {
+                hasCodeChanges = true;
+            }
+        }
+
+        steps.AddRange(dotnetDirectories.Order(StringComparer.Ordinal).Select(directory => new VerificationStep("dotnet_build", directory)));
+        foreach (var directory in nodeDirectories.Order(StringComparer.Ordinal))
+        {
+            if (File.Exists(Path.Combine(directory, "tsconfig.json"))) steps.Add(new VerificationStep("tsc", directory));
+            if (FindPackageFile(directory, ["eslint"], Path.Combine("bin", "eslint.js")) != null) steps.Add(new VerificationStep("eslint", directory));
+        }
+        steps.AddRange(cargoDirectories.Order(StringComparer.Ordinal).Select(directory => new VerificationStep("cargo_check", directory)));
+        if (hasCodeChanges) steps.Add(new VerificationStep("affected_tests", root));
+        return steps;
+    }
+
+    private static string FindContainingDirectory(string root, string absoluteFile, Func<string, bool> matches)
+    {
+        var fullRoot = Path.GetFullPath(root);
+        var start = new DirectoryInfo(Path.GetDirectoryName(absoluteFile)!);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        for (var directory = start; directory != null; directory = directory.Parent)
+        {
+            var fullDirectory = Path.GetFullPath(directory.FullName);
+            if (!fullDirectory.Equals(fullRoot, comparison) && !fullDirectory.StartsWith(fullRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, comparison)) break;
+            if (matches(fullDirectory)) return fullDirectory;
+            if (fullDirectory.Equals(fullRoot, comparison)) break;
+        }
+        return fullRoot;
+    }
+
+    private static JsonObject SummarizeVerificationStep(VerificationStep step, string root, string status,
+        DateTimeOffset started, JsonObject result)
+    {
+        var summary = new JsonObject
+        {
+            ["operation"] = step.Operation,
+            ["projectDirectory"] = RelativeDirectory(root, step.ProjectDirectory),
+            ["status"] = status,
+            ["durationMs"] = (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds
+        };
+        if (result["exitCode"] != null) summary["exitCode"] = result["exitCode"]!.DeepClone();
+        if (result["errorCount"] != null) summary["errorCount"] = result["errorCount"]!.DeepClone();
+        if (result["warningCount"] != null) summary["warningCount"] = result["warningCount"]!.DeepClone();
+        if (result["stats"] != null) summary["stats"] = result["stats"]!.DeepClone();
+        return summary;
+    }
+
+    private static bool IsVerificationFailure(string status) => status is not ("success" or "no_tests");
+
+    private static string RelativeDirectory(string root, string directory)
+    {
+        var relative = Path.GetRelativePath(root, directory).Replace(Path.DirectorySeparatorChar, '/');
+        return relative == "." ? "." : relative;
+    }
 
     [McpServerTool(Name = "inspect_playwright_trace")]
     [Description("Inspect a trace ZIP without extracting it and return failed actions, HTTP and JavaScript errors, and a DOM excerpt before the failure. This does not replace visual verification of rendering or CSS.")]

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
@@ -324,6 +324,19 @@ try {
     timeoutSeconds: 180
   }, 200000);
   assert.equal(build.status, 'success', JSON.stringify(build));
+  await writeFile(path.join(buildProject, '.gitignore'), 'bin/\nobj/\n');
+  execFileSync('git', ['init', '-q'], { cwd: buildProject });
+  execFileSync('git', ['add', '.'], { cwd: buildProject });
+  execFileSync('git', ['-c', 'user.name=Zuma Smoke', '-c', 'user.email=zuma-smoke@example.invalid', 'commit', '-q', '-m', 'fixture'], { cwd: buildProject });
+  await writeFile(path.join(buildProject, 'Program.cs'), 'using System;\nConsole.WriteLine("verify all");\n');
+  const verified = await callTool('zuma_execute', {
+    operation: 'verify_all',
+    workingDirectory: buildProject,
+    timeoutSeconds: 180
+  }, 200000);
+  assert.equal(verified.status, 'success', JSON.stringify(verified));
+  assert.deepEqual(verified.plan.map(step => step.operation), ['dotnet_build', 'affected_tests']);
+  assert.ok(verified.completedSteps.every(step => ['success', 'no_tests'].includes(step.status)), JSON.stringify(verified));
   const verificationRows = (await readFile(verificationHistoryPath, 'utf8')).trim().split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
   assert.ok(verificationRows.some(row => row.tool === 'run_dotnet_build' && row.status === 'success' && row.workspace === buildProject));
   const sessionPath = path.join(buildProject, 'synthetic-chat.jsonl');
@@ -345,7 +358,7 @@ try {
   });
   assert.equal(handoff.status, 'success', JSON.stringify(handoff));
   assert.match(handoff.handoffText, /Verify the packaged Zuma handoff/);
-  assert.match(handoff.handoffText, /run_dotnet_build: success/);
+  assert.match(handoff.handoffText, /verify_all: success/);
   assert.match(handoff.handoffText, /Continue with release verification/);
   const cleared = await callTool('clear_task_anchor', {});
   assert.equal(cleared.status, 'cleared');
