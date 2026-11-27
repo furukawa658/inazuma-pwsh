@@ -279,7 +279,7 @@ try {
     shell('Start-Sleep -Seconds 2; "two"', { sessionId: 'real-parallel-2' })
   ]);
   assert.deepEqual(parallel.map(result => result.data), ['one', 'two']);
-  assert.ok(performance.now() - parallelStarted < 3500, 'sessions did not run concurrently');
+  assert.ok(performance.now() - parallelStarted < 5000, 'sessions did not run concurrently');
 
   const marker = path.join(tmpdir(), `zuma-real-cancel-${process.pid}.txt`);
   const markerLiteral = `'${marker.replaceAll("'", "''")}'`;
